@@ -1,2 +1,6 @@
-# SO_A103_heatSim
-LEIC-A, Projecto de SO 17/18
+# heatSim
+
+|   Number   |          Name           |            Email            |   Name GitHub  |
+| ---------- | ----------------------- | --------------------------- | -------------- |
+| 69799      | Ana Marta Mendes        | marta.durand@gmail.com      | martadmendes   |
+| 70281	     | João Moreira            | jplmoreira92@gmail.com      | jplmoreira     |
