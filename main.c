@@ -9,16 +9,27 @@
 
 #include "matrix2d.h"
 
+typedef struct argumentos_simul {
+  DoubleMatrix2D *matrix;
+  DoubleMatrix2D *matrix_aux;
+  int            linhas;
+  int            colunas;
+  int            iteracoes;
+  int            thread_id;
+  int            thread_num;
+} args_simul;
+
 
 /*--------------------------------------------------------------------
 | Function: simul
 ---------------------------------------------------------------------*/
 
-DoubleMatrix2D *simul(DoubleMatrix2D *matrix, DoubleMatrix2D *matrix_aux, int linhas, int colunas, int numIteracoes) {
+void *simul(void* args) {
 
   DoubleMatrix2D *m, *aux, *tmp;
   int iter, i, j;
   double value;
+  args_simul *arg = (args_simul *) args;
 
 
   if(linhas < 2 || colunas < 2)
@@ -28,7 +39,7 @@ DoubleMatrix2D *simul(DoubleMatrix2D *matrix, DoubleMatrix2D *matrix_aux, int li
   aux = matrix_aux;
 
   for (iter = 0; iter < numIteracoes; iter++) {
-  
+
     for (i = 1; i < linhas - 1; i++)
       for (j = 1; j < colunas - 1; j++) {
         value = ( dm2dGetEntry(m, i-1, j) + dm2dGetEntry(m, i+1, j) +
@@ -39,9 +50,10 @@ DoubleMatrix2D *simul(DoubleMatrix2D *matrix, DoubleMatrix2D *matrix_aux, int li
     tmp = aux;
     aux = m;
     m = tmp;
-  }
 
-  return m;
+    //enviar msg para main
+    return 0;
+  }
 }
 
 /*--------------------------------------------------------------------
@@ -51,7 +63,7 @@ DoubleMatrix2D *simul(DoubleMatrix2D *matrix, DoubleMatrix2D *matrix_aux, int li
 int parse_integer_or_exit(char const *str, char const *name)
 {
   int value;
- 
+
   if(sscanf(str, "%d", &value) != 1) {
     fprintf(stderr, "\nErro no argumento \"%s\".\n\n", name);
     exit(1);
@@ -118,9 +130,6 @@ int main (int argc, char** argv) {
     return -1;
   }
 
-
-  /* ALTERACOES PEDIDAS  <inicio>  */
-
   int i;
 
   for(i=0; i<N+2; i++)
@@ -140,9 +149,6 @@ int main (int argc, char** argv) {
     dm2dPrint(matrix_aux);
   }
 
-  /* ALTERACOES PEDIDAS  <fim>  */
-
-
   for(i=0; i<N+2; i++)
     dm2dSetLineTo(matrix, i, 0);
 
@@ -153,10 +159,32 @@ int main (int argc, char** argv) {
 
   dm2dCopy (matrix_aux, matrix);
 
-  result = simul(matrix, matrix_aux, N+2, N+2, iteracoes);
-  if (result == NULL) {
-    printf("\nErro na simulacao.\n\n");
-    return -1;
+  /* create slaves */
+  args_simul *slave_args;
+  pthread_t *slaves;
+
+  slave_args = (args_simul*)malloc(numTarefas*sizeof(args_simul));
+  slaves     = (pthread_t*)malloc(numTarefas*sizeof(pthread_t));
+
+  for (i=0; i<N; i++) {
+    slave_args[i].id = i+1;
+    slave_args[i].n  = N;
+
+    pthread_create(&slaves[i], NULL, simul, &slave_args[i]);
+  }
+
+  // result = simul(matrix, matrix_aux, N+2, N+2, iteracoes);
+  // if (result == NULL) {
+  //   printf("\nErro na simulacao.\n\n");
+  //   return -1;
+  // }
+
+  /* Esperar que os Escravos Terminem */
+  for (i = 0; i < N; i++) {
+    if (pthread_join(slaves[i], NULL)) {
+      fprintf(stderr, "\nErro ao esperar por um escravo.\n");
+      return -1;
+    }
   }
 
   dm2dPrint(result);
