@@ -81,9 +81,9 @@ double parse_double_or_exit(char const *str, char const *name)
 
 int main (int argc, char** argv) {
 
-  if(argc != 7) {
+  if(argc != 9) {
     fprintf(stderr, "\nNumero invalido de argumentos.\n");
-    fprintf(stderr, "Uso: heatSim N tEsq tSup tDir tInf iteracoes\n\n");
+    fprintf(stderr, "Uso: heatSim N tEsq tSup tDir tInf iteracoes trab csz\n\n");
     return 1;
   }
 
@@ -94,6 +94,8 @@ int main (int argc, char** argv) {
   double tDir = parse_double_or_exit(argv[4], "tDir");
   double tInf = parse_double_or_exit(argv[5], "tInf");
   int iteracoes = parse_integer_or_exit(argv[6], "iteracoes");
+  int trab = parse_integer_or_exit(argv[7], "trab");
+  int csz = parse_integer_or_exit(argv[8], "csz");
 
   DoubleMatrix2D *matrix, *matrix_aux, *result;
 
@@ -102,7 +104,7 @@ int main (int argc, char** argv) {
 	" N=%d tEsq=%.1f tSup=%.1f tDir=%.1f tInf=%.1f iteracoes=%d\n",
 	N, tEsq, tSup, tDir, tInf, iteracoes);
 
-  if(N < 1 || tEsq < 0 || tSup < 0 || tDir < 0 || tInf < 0 || iteracoes < 1) {
+  if(N < 1 || tEsq < 0 || tSup < 0 || tDir < 0 || tInf < 0 || iteracoes < 1 || trab < 1 || csz < 1) {
     fprintf(stderr, "\nErro: Argumentos invalidos.\n"
 	" Lembrar que N >= 1, temperaturas >= 0 e iteracoes >= 1\n\n");
     return 1;
