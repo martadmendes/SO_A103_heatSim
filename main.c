@@ -8,6 +8,8 @@
 #include <errno.h>
 
 #include "matrix2d.h"
+#include "mplib3.h"
+#define BUFFSZ 256
 
 typedef struct argumentos_simul {
   DoubleMatrix2D *matrix;
@@ -52,7 +54,6 @@ void *simul(void* args) {
     m = tmp;
 
     //enviar msg para main
-    return 0;
   }
 }
 
@@ -109,7 +110,7 @@ int main (int argc, char** argv) {
   int trab = parse_integer_or_exit(argv[7], "trab");
   int csz = parse_integer_or_exit(argv[8], "csz");
 
-  DoubleMatrix2D *matrix, *matrix_aux, *result;
+  DoubleMatrix2D *matrix, *result, *slice, *slice_aux;
 
 
   fprintf(stderr, "\nArgumentos:\n"
@@ -123,30 +124,19 @@ int main (int argc, char** argv) {
   }
 
   matrix = dm2dNew(N+2, N+2);
-  matrix_aux = dm2dNew(N+2, N+2);
+  result = dm2dNew(N+2, N+2);
 
   if (matrix == NULL || matrix_aux == NULL) {
     fprintf(stderr, "\nErro: Nao foi possivel alocar memoria para as matrizes.\n\n");
     return -1;
   }
 
+  int slicesz = N / trab;
   int i;
 
-  for(i=0; i<N+2; i++)
-    dm2dSetLineTo(matrix, i, i);
-  dm2dPrint(matrix);
-
-
-  for(i=0; i<N+2; i++)
-    dm2dSetColumnTo(matrix_aux, i, i);
-  dm2dPrint(matrix_aux);
-
-
-  if(3 <= N+1) {
-    double *line;
-    line = dm2dGetLine(matrix, 3);
-    dm2dSetLine(matrix_aux, 2, line);
-    dm2dPrint(matrix_aux);
+  if (inicializarMPlib(csz,trab+1) == -1) {
+    printf("Erro ao inicializar MPLib.\n");
+    return 1;
   }
 
   for(i=0; i<N+2; i++)
@@ -157,30 +147,49 @@ int main (int argc, char** argv) {
   dm2dSetColumnTo (matrix, 0, tEsq);
   dm2dSetColumnTo (matrix, N+1, tDir);
 
-  dm2dCopy (matrix_aux, matrix);
+  dm2dCopy(result, matrix);
 
   /* create slaves */
   args_simul *slave_args;
   pthread_t *slaves;
+  int j;
+  double *line_values;
 
-  slave_args = (args_simul*)malloc(numTarefas*sizeof(args_simul));
-  slaves     = (pthread_t*)malloc(numTarefas*sizeof(pthread_t));
+  slave_args = (args_simul*)malloc(trab*sizeof(args_simul));
+  slaves     = (pthread_t*)malloc(trab*sizeof(pthread_t));
 
-  for (i=0; i<N; i++) {
-    slave_args[i].id = i+1;
-    slave_args[i].n  = N;
+  for (i=0; i<trab; i++) {
+    slave_args[i].thread_id = i+1;
+    slave_args[i].thread_num  = trab;
+    slave_args[i].linhas = slicesz+2;
+    slave_args[i].colunas = N+2;
+    slave_args[i].iteracoes = iteracoes;
+    slice = dm2dNew(slicesz+2, N+2);
+    slice_aux = dm2dNew(slicesz+2, N+2);
+
+    for (j=0; j<slicesz+2; j++) {
+      line_values = dm2dGetLine(matrix, i*slicesz + j);
+      dm2dSetLine(slice, j, line_values);
+    }
+    dm2dCopy(slice_aux, slice);
+    slave_args[i].matrix = slice;
+    slave_args[i].matrix_aux = slice_aux;
 
     pthread_create(&slaves[i], NULL, simul, &slave_args[i]);
   }
 
-  // result = simul(matrix, matrix_aux, N+2, N+2, iteracoes);
-  // if (result == NULL) {
-  //   printf("\nErro na simulacao.\n\n");
-  //   return -1;
-  // }
+  /* Receber os dados dos escravos */
+  for (i = 0; i < trab; i++) {
+    receberMensagem(i+1, 0, slice, BUFFSZ);
+    for (j = 1; j < slicesz; j++) {
+      line_values = dm2dGetLine(slice, j);
+      dm2dSetLine(result, i*slicesz + j, line_values);
+    }
+    dm2dFree(slice);
+  }
 
   /* Esperar que os Escravos Terminem */
-  for (i = 0; i < N; i++) {
+  for (i = 0; i < trab; i++) {
     if (pthread_join(slaves[i], NULL)) {
       fprintf(stderr, "\nErro ao esperar por um escravo.\n");
       return -1;
@@ -190,7 +199,7 @@ int main (int argc, char** argv) {
   dm2dPrint(result);
 
   dm2dFree(matrix);
-  dm2dFree(matrix_aux);
+  dm2dFree(result);
 
   return 0;
 }
