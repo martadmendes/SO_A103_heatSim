@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <pthread.h>
 
 #include "matrix2d.h"
 #include "mplib3.h"
@@ -29,14 +30,10 @@ typedef struct argumentos_simul {
 void *simul(void* args) {
 
   DoubleMatrix2D *m, *aux, *tmp;
-  int iter, i, j, linhas, colunas, id, trab;
+  int iter, i, j, linhas, colunas, id, trab, iteracoes;
   double value;
   double *line_values;
   args_simul *arg = (args_simul *) args;
-
-
-  if(linhas < 2 || colunas < 2)
-    return -1;
 
   m = arg->matrix;
   aux = arg->matrix_aux;
@@ -44,8 +41,12 @@ void *simul(void* args) {
   colunas = arg->colunas;
   id = arg->thread_id;
   trab = arg->thread_num;
+  iteracoes = arg->iteracoes;
 
-  for (iter = 0; iter < numIteracoes; iter++) {
+  if(linhas < 2 || colunas < 2)
+    return NULL;
+
+  for (iter = 0; iter < iteracoes; iter++) {
 
     for (i = 1; i < linhas - 1; i++)
       for (j = 1; j < colunas - 1; j++) {
@@ -62,11 +63,11 @@ void *simul(void* args) {
     if (id > 1) {
       line_values = dm2dGetLine(m, 1);
       enviarMensagem(id, id-1, line_values, BUFFSZ);
-      receberMensage(id-1, id, line_values, BUFFSZ);
-      dm2SetLine(m, 0, line_values);
+      receberMensagem(id-1, id, line_values, BUFFSZ);
+      dm2dSetLine(m, 0, line_values);
     }
     if (id < trab) {
-      line_values = dm2GetLine(m, linhas-2);
+      line_values = dm2dGetLine(m, linhas-2);
       enviarMensagem(id, id+1, line_values, BUFFSZ);
       receberMensagem(id+1, id, line_values, BUFFSZ);
       dm2dSetLine(m, linhas-1, line_values);
@@ -149,7 +150,7 @@ int main (int argc, char** argv) {
   matrix = dm2dNew(N+2, N+2);
   result = dm2dNew(N+2, N+2);
 
-  if (matrix == NULL || matrix_aux == NULL) {
+  if (matrix == NULL || result == NULL) {
     fprintf(stderr, "\nErro: Nao foi possivel alocar memoria para as matrizes.\n\n");
     return -1;
   }
