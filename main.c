@@ -29,16 +29,21 @@ typedef struct argumentos_simul {
 void *simul(void* args) {
 
   DoubleMatrix2D *m, *aux, *tmp;
-  int iter, i, j;
+  int iter, i, j, linhas, colunas, id, trab;
   double value;
+  double *line_values;
   args_simul *arg = (args_simul *) args;
 
 
   if(linhas < 2 || colunas < 2)
-    return NULL;
+    return -1;
 
-  m = matrix;
-  aux = matrix_aux;
+  m = arg->matrix;
+  aux = arg->matrix_aux;
+  linhas = arg->linhas;
+  colunas = arg->colunas;
+  id = arg->thread_id;
+  trab = arg->thread_num;
 
   for (iter = 0; iter < numIteracoes; iter++) {
 
@@ -53,8 +58,26 @@ void *simul(void* args) {
     aux = m;
     m = tmp;
 
-    //enviar msg para main
+    //trocar mensagens entre outros trabalhadores
+    if (id > 1) {
+      line_values = dm2dGetLine(m, 1);
+      enviarMensagem(id, id-1, line_values, BUFFSZ);
+      receberMensage(id-1, id, line_values, BUFFSZ);
+      dm2SetLine(m, 0, line_values);
+    }
+    if (id < trab) {
+      line_values = dm2GetLine(m, linhas-2);
+      enviarMensagem(id, id+1, line_values, BUFFSZ);
+      receberMensagem(id+1, id, line_values, BUFFSZ);
+      dm2dSetLine(m, linhas-1, line_values);
+    }
   }
+
+  // enviar msg ao master
+  enviarMensagem(id, 0, m, BUFFSZ);
+  dm2dFree(aux);
+
+  return 0;
 }
 
 /*--------------------------------------------------------------------
