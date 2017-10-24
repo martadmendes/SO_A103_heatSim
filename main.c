@@ -10,16 +10,13 @@
 
 #include "matrix2d.h"
 #include "mplib3.h"
-#define BUFFSZ 256
 
 typedef struct argumentos_simul {
-  DoubleMatrix2D *matrix;
-  DoubleMatrix2D *matrix_aux;
-  int            linhas;
-  int            colunas;
-  int            iteracoes;
-  int            thread_id;
-  int            thread_num;
+  int id;
+  int N;
+  int iter;
+  int trab;
+  int slicesz;
 } args_simul;
 
 
@@ -28,57 +25,105 @@ typedef struct argumentos_simul {
 ---------------------------------------------------------------------*/
 
 void *simul(void* args) {
-
-  DoubleMatrix2D *m, *aux, *tmp;
-  int iter, i, j, linhas, colunas, id, trab, iteracoes;
-  double value;
-  double *line_values;
   args_simul *arg = (args_simul *) args;
+  DoubleMatrix2D *slices[2];
+  int i, j, actual, next, msgsz, iter;
 
-  m = arg->matrix;
-  aux = arg->matrix_aux;
-  linhas = arg->linhas;
-  colunas = arg->colunas;
-  id = arg->thread_id;
-  trab = arg->thread_num;
-  iteracoes = arg->iteracoes;
+  /* Create slices */
+  slices[0] = dm2dNew(arg->slicesz+2, arg->N+2);
+  slices[1] = dm2dNew(arg->slicesz+2, arg->N+2);
 
-  if(linhas < 2 || colunas < 2)
-    return NULL;
-
-  for (iter = 0; iter < iteracoes; iter++) {
-
-    for (i = 1; i < linhas - 1; i++)
-      for (j = 1; j < colunas - 1; j++) {
-        value = ( dm2dGetEntry(m, i-1, j) + dm2dGetEntry(m, i+1, j) +
-		dm2dGetEntry(m, i, j-1) + dm2dGetEntry(m, i, j+1) ) / 4.0;
-        dm2dSetEntry(aux, i, j, value);
-      }
-
-    tmp = aux;
-    aux = m;
-    m = tmp;
-
-    //trocar mensagens entre outros trabalhadores
-    if (id > 1) {
-      line_values = dm2dGetLine(m, 1);
-      enviarMensagem(id, id-1, line_values, BUFFSZ);
-      receberMensagem(id-1, id, line_values, BUFFSZ);
-      dm2dSetLine(m, 0, line_values);
-    }
-    if (id < trab) {
-      line_values = dm2dGetLine(m, linhas-2);
-      enviarMensagem(id, id+1, line_values, BUFFSZ);
-      receberMensagem(id+1, id, line_values, BUFFSZ);
-      dm2dSetLine(m, linhas-1, line_values);
+  if (slices[0] == NULL || slices[1] == NULL) {
+    fprintf(stderr, "\nErro ao criar Matrix2d numa trabalhadora.\n");
+    exit(-1);
+  }
+  
+  /* Receive slice from master */
+  msgsz = (arg->N+2) * sizeof(double);
+  for (i = 0; i < arg->slicesz + 2; i++) {
+    if (receberMensagem(0, arg->id, dm2dGetLine(slices[0], i), msgsz) != msgsz) {
+      fprintf(stderr, "\nErro ao receber mensagem da tarefa mestre.\n");
+      exit(-1);
     }
   }
 
-  // enviar msg ao master
-  enviarMensagem(id, 0, m, BUFFSZ);
-  dm2dFree(aux);
+  dm2dCopy(slices[1], slices[0]);
+  
+  /* Iteration */
+  for (iter = 0; iter < arg->iter; iter++) {
+    actual = iter % 2;
+    next = 1 - iter % 2;
 
-  return 0;
+    /* Calculate simulation */
+    for (i = 0; i < arg->slicesz; i++) {
+      for (j = 0; j < arg->N; j++) {
+        double val = (dm2dGetEntry(slices[actual], i, j+1) +
+                      dm2dGetEntry(slices[actual], i+2, j+1) +
+                      dm2dGetEntry(slices[actual], i+1, j) +
+                      dm2dGetEntry(slices[actual], i+1, j+2))/4;
+        dm2dSetEntry(slices[next], i+1, j+1, val);
+      }
+    }
+
+    /* Exchange new values of adjacent lines. Even slaves send before receiving */
+    if (arg->id % 2 == 0) {
+      if (arg->id > 1) {
+        if (enviarMensagem(arg->id, arg->id - 1, dm2dGetLine(slices[next], 1), msgsz) != msgsz) {
+          fprintf(stderr, "\nErro ao enviar mensagem entre trabalhadoras.\n");
+          exit(-1);
+        }
+        if (receberMensagem(arg->id - 1, arg->id, dm2dGetLine(slices[next], 0), msgsz) != msgsz) {
+          fprintf(stderr, "\nErro ao receber mensagem entre trabalhadoras.\n");
+          exit(-1);
+        }
+      }
+      if (arg->id < arg->trab) {
+        if (enviarMensagem(arg->id, arg->id + 1, dm2dGetLine(slices[next], arg->slicesz), msgsz) != msgsz) {
+          fprintf(stderr, "\nErro ao enviar mensagem entre trabalhadoras.\n");
+          exit(-1);
+        }
+        if (receberMensagem(arg->id + 1, arg->id, dm2dGetLine(slices[next], arg->slicesz + 1), msgsz) != msgsz) {
+          fprintf(stderr, "\nErro ao receber mensagem entre trabalhadoras.\n");
+          exit(-1);
+        }
+      }
+    } else {
+      if (arg->id > 1) {
+        if (receberMensagem(arg->id - 1, arg->id, dm2dGetLine(slices[next], 0), msgsz) != msgsz) {
+          fprintf(stderr, "\nErro ao receber mensagem entre trabalhadoras.\n");
+          exit(-1);
+        }
+        if (enviarMensagem(arg->id, arg->id - 1, dm2dGetLine(slices[next], 1), msgsz) != msgsz) {
+          fprintf(stderr, "\nErro ao enviar mensagem entre trabalhadoras\n");
+          exit(-1);
+        }
+      }
+      if (arg->id < arg->trab) {
+        if (receberMensagem(arg->id + 1, arg->id, dm2dGetLine(slices[next], arg->slicesz + 1), msgsz) != msgsz) {
+          fprintf(stderr, "\nErro ao receber mensagem entre trabalhadoras\n");
+          exit(-1);
+        }
+        if (enviarMensagem(arg->id, arg->id + 1, dm2dGetLine(slices[next], arg->slicesz), msgsz) != msgsz) {
+          fprintf(stderr, "\nErro ao enviar mensagem entre trabalhadoras\n");
+          exit(-1);
+        }
+      }
+    }
+  }
+
+  /* Send final slices to master */
+  for (i = 0; i < arg->slicesz; i++) {
+    if (enviarMensagem(arg->id, 0, dm2dGetLine(slices[next], i + 1), msgsz) != msgsz) {
+      fprintf(stderr, "\nErro ao enviar mensagem à tarefa mestre.\n");
+      exit(-1);
+    }
+  }
+
+  /* Free memory */
+  dm2dFree(slices[0]);
+  dm2dFree(slices[1]);
+
+  pthread_exit(NULL);
 }
 
 /*--------------------------------------------------------------------
@@ -120,96 +165,102 @@ int main (int argc, char** argv) {
 
   if(argc != 9) {
     fprintf(stderr, "\nNumero invalido de argumentos.\n");
-    fprintf(stderr, "Uso: heatSim N tEsq tSup tDir tInf iteracoes trab csz\n\n");
+    fprintf(stderr, "Uso: heatSim N tEsq tSup tDir tInf iter trab csz\n\n");
     return 1;
   }
 
+  /* Read input */
   /* argv[0] = program name */
   int N = parse_integer_or_exit(argv[1], "N");
   double tEsq = parse_double_or_exit(argv[2], "tEsq");
   double tSup = parse_double_or_exit(argv[3], "tSup");
   double tDir = parse_double_or_exit(argv[4], "tDir");
   double tInf = parse_double_or_exit(argv[5], "tInf");
-  int iteracoes = parse_integer_or_exit(argv[6], "iteracoes");
+  int iter = parse_integer_or_exit(argv[6], "iter");
   int trab = parse_integer_or_exit(argv[7], "trab");
   int csz = parse_integer_or_exit(argv[8], "csz");
 
-  DoubleMatrix2D *matrix, *result, *slice, *slice_aux;
+  DoubleMatrix2D *matrix;
+  int slicesz, msgsz, i, j; 
+  args_simul *slave_args;
+  pthread_t *slaves;
 
 
   fprintf(stderr, "\nArgumentos:\n"
-	" N=%d tEsq=%.1f tSup=%.1f tDir=%.1f tInf=%.1f iteracoes=%d\n",
-	N, tEsq, tSup, tDir, tInf, iteracoes);
+	" N=%d tEsq=%.1f tSup=%.1f tDir=%.1f tInf=%.1f iter=%d trab=%d csz=%d\n",
+          N, tEsq, tSup, tDir, tInf, iter, trab, csz);
 
-  if(N < 1 || tEsq < 0 || tSup < 0 || tDir < 0 || tInf < 0 || iteracoes < 1 || trab < 1 || csz < 1) {
+  /* Input verification */
+  if(N < 1 || tEsq < 0 || tSup < 0 || tDir < 0 || tInf < 0 || iter < 1 || trab < 1 || csz < 1) {
     fprintf(stderr, "\nErro: Argumentos invalidos.\n"
-	" Lembrar que N >= 1, temperaturas >= 0 e iteracoes >= 1\n\n");
+	" Lembrar que N >= 1, temperaturas >= 0, iter >= 1, trab >= 1 e csz >= 0\n\n");
     return 1;
   }
 
-  matrix = dm2dNew(N+2, N+2);
-  result = dm2dNew(N+2, N+2);
+  /* Initialization of Message Passing Library */
+  if (inicializarMPlib(csz,trab+1) != 0) {
+    fprintf(stderr, "\nErro ao inicializar MPLib.\n");
+    return 1;
+  }
 
-  if (matrix == NULL || result == NULL) {
-    fprintf(stderr, "\nErro: Nao foi possivel alocar memoria para as matrizes.\n\n");
+  /* Calculate initial matrix */
+  matrix = dm2dNew(N+2, N+2);
+
+  if (matrix == NULL) {
+    fprintf(stderr, "\nErro: Nao foi possivel alocar memoria para a matriz.\n\n");
     return -1;
   }
-
-  int slicesz = N / trab;
-  int i;
-
-  if (inicializarMPlib(csz,trab+1) == -1) {
-    printf("Erro ao inicializar MPLib.\n");
-    return 1;
-  }
-
-  for(i=0; i<N+2; i++)
-    dm2dSetLineTo(matrix, i, 0);
 
   dm2dSetLineTo (matrix, 0, tSup);
   dm2dSetLineTo (matrix, N+1, tInf);
   dm2dSetColumnTo (matrix, 0, tEsq);
   dm2dSetColumnTo (matrix, N+1, tDir);
 
-  dm2dCopy(result, matrix);
+  /* Calculate slice size */
+  slicesz = N / trab;
 
-  /* create slaves */
-  args_simul *slave_args;
-  pthread_t *slaves;
-  int j;
-  double *line_values;
-
-  slave_args = (args_simul*)malloc(trab*sizeof(args_simul));
+  /* Memory allocation for slaves and args */
   slaves     = (pthread_t*)malloc(trab*sizeof(pthread_t));
+  slave_args = (args_simul*)malloc(trab*sizeof(args_simul));
 
-  for (i=0; i<trab; i++) {
-    slave_args[i].thread_id = i+1;
-    slave_args[i].thread_num  = trab;
-    slave_args[i].linhas = slicesz+2;
-    slave_args[i].colunas = N+2;
-    slave_args[i].iteracoes = iteracoes;
-    slice = dm2dNew(slicesz+2, N+2);
-    slice_aux = dm2dNew(slicesz+2, N+2);
-
-    for (j=0; j<slicesz+2; j++) {
-      line_values = dm2dGetLine(matrix, i*slicesz + j);
-      dm2dSetLine(slice, j, line_values);
-    }
-    dm2dCopy(slice_aux, slice);
-    slave_args[i].matrix = slice;
-    slave_args[i].matrix_aux = slice_aux;
-
-    pthread_create(&slaves[i], NULL, simul, &slave_args[i]);
+  if (slaves == NULL || slave_args == NULL) {
+    fprintf(stderr, "\nErro ao alocar memória para trabalhadoras.\n");
+    return -1;
   }
 
-  /* Receber os dados dos escravos */
-  for (i = 0; i < trab; i++) {
-    receberMensagem(i+1, 0, slice, BUFFSZ);
-    for (j = 1; j < slicesz; j++) {
-      line_values = dm2dGetLine(slice, j);
-      dm2dSetLine(result, i*slicesz + j, line_values);
+  /* Create slaves and args */
+  for (i=0; i<trab; i++) {
+    slave_args[i].id = i+1;
+    slave_args[i].N = N;
+    slave_args[i].iter = iter;
+    slave_args[i].trab = trab;
+    slave_args[i].slicesz = slicesz;
+    if (pthread_create(&slaves[i], NULL, simul, &slave_args[i]) != 0) {
+      fprintf(stderr, "\nErro ao criar uma tarefa trabalhadora.\n");
+      return -1;
     }
-    dm2dFree(slice);
+  }
+
+  /* Send slices to slaves */
+  msgsz = (N+2) * sizeof(double);
+  for (i = 0; i < trab; i++) {
+    for (j = 0; j < (slicesz + 2); j++) {
+      if (enviarMensagem(0, i+1, dm2dGetLine(matrix, i*slicesz + j), msgsz)
+          != msgsz) {
+        fprintf(stderr, "\nErro ao enviar mensagem para trabalhadora.\n");
+        return -1;
+      }
+    }
+  }
+  
+  /* Receive final slices of each slave and saves in matrix */
+  for (i = 0; i < trab; i++) {
+    for (j = 0; j < slicesz; j++) {
+      if (receberMensagem(i+1, 0, dm2dGetLine(matrix, i*slicesz + j + 1), msgsz) != msgsz) {
+        fprintf(stderr, "\nErro ao receber mensagem de uma trabalhadora.\n");
+        return -1;
+      }
+    }
   }
 
   /* Esperar que os Escravos Terminem */
@@ -220,10 +271,14 @@ int main (int argc, char** argv) {
     }
   }
 
-  dm2dPrint(result);
+  /* Print resulting matrix */
+  dm2dPrint(matrix);
 
+  /* Release memory */
   dm2dFree(matrix);
-  dm2dFree(result);
+  free(slaves);
+  free(slave_args);
+  libertarMPlib();
 
   return 0;
 }
