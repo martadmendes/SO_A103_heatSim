@@ -1,5 +1,5 @@
 /*
-// Biblioteca de troca de mensagens, versao 4
+// Biblioteca de troca de mensagens, versao 3
 // Sistemas Operativos, DEI/IST/ULisboa 2017-18
 */
 
