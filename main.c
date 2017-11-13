@@ -25,7 +25,7 @@ typedef struct argumentos_simul {
 
 typedef struct slave_attributes {
     pthread_mutex_t simulation_mutex;
-    pthred_cond_t wait_for_simul;
+    pthread_cond_t wait_for_simul;
 } slave_attr;
 
 
@@ -45,7 +45,7 @@ slave_attr       *slave_attr_array;
 
 void *simul(void* args) {
   args_simul *arg = (args_simul *) args;
-  int i, j, actual, next, msgsz, iter;
+  int i, j, actual, next, iter;
 
 
   /* Iteration */
@@ -67,7 +67,7 @@ void *simul(void* args) {
         dm2dSetEntry(matrices[next], i+1, j+1, val);
       }
     }
-    if(pthread_mutex_unlock(&slave_attr_array[(arg->id)-1]) != 0) {
+    if(pthread_mutex_unlock(&slave_attr_array[(arg->id)-1].simulation_mutex) != 0) {
       fprintf(stderr, "\nErro ao desbloquear mutex\n");
       exit(1);
     }
@@ -81,7 +81,7 @@ void *simul(void* args) {
     if (current_workers == 0) {
         if (pthread_cond_broadcast(&wait_for_workers) != 0) {
           fprintf(stderr, "\nErro ao desbloquear variável de condição\n");
-          pthrad_exit(NULL);
+          pthread_exit(NULL);
         }
         current_workers = arg->trab;
     } else {
@@ -154,7 +154,7 @@ int main (int argc, char** argv) {
   int trab = parse_integer_or_exit(argv[7], "trab");
   int csz = parse_integer_or_exit(argv[8], "csz");
 
-  int slicesz, msgsz, i, j;
+  int slicesz, i;
   args_simul *slave_args;
   pthread_t *slaves;
 
@@ -254,12 +254,12 @@ int main (int argc, char** argv) {
     fprintf(stderr, "\nErro ao destruir variável de condição\n");
     exit(1);
   }
-  for(i=0, i<trab, i++) {
+  for(i=0; i<trab; i++) {
     if(pthread_mutex_destroy(&slave_attr_array[i].simulation_mutex) != 0) {
       fprintf(stderr, "\nErro ao destruir mutex\n");
       exit(1);
     }
-    if(pthread_cond_destroy(&slave_attr_array[i].wait_for_simul != 0) {
+    if(pthread_cond_destroy(&slave_attr_array[i].wait_for_simul) != 0) {
       fprintf(stderr, "\nErro ao destruir variável de condição\n");
       exit(1);
     }
@@ -268,6 +268,6 @@ int main (int argc, char** argv) {
   dm2dFree(matrices[1]);
   free(slaves);
   free(slave_args);
-  free(slave_attr);
+  free(slave_attr_array);
   return 0;
 }
