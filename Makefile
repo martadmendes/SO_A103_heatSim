@@ -23,7 +23,7 @@ clean:
 	rm -f *.o heatSim
 
 zip:
-	zip heatSim_ex02_solucao.zip main.c matrix2d.c matrix2d.h mplib3.c mplib3.h leQueue.c leQueue.h Makefile
+	zip heatSim_ex03_solucao.zip main.c matrix2d.c matrix2d.h mplib3.c mplib3.h leQueue.c leQueue.h Makefile
 
 run:
 	./heatSim 8 10 10 0 0 10 4 1 1
