@@ -23,21 +23,14 @@ typedef struct argumentos_simul {
   int slicesz;
 } args_simul;
 
-typedef struct slave_attributes {
-    pthread_mutex_t simulation_mutex;
-    pthread_cond_t wait_for_simul;
-} slave_attr;
-
-
 /*--------------------------------------------------------------------
 | Global Variables
 ---------------------------------------------------------------------*/
 
-int              current_workers;
 DoubleMatrix2D   *matrices[2];
-pthread_mutex_t  iteration_mutex;
-pthread_cond_t   wait_for_workers;
-slave_attr       *slave_attr_array;
+pthread_mutex_t  *iteration_mutex;
+pthread_cond_t   *wait_for_workers;
+int              *num_workers;
 
 /*--------------------------------------------------------------------
 | Function: simul
@@ -45,54 +38,46 @@ slave_attr       *slave_attr_array;
 
 void *simul(void* args) {
   args_simul *arg = (args_simul *) args;
-  int i, j, actual, next, iter;
+  int i, j, actual, next, iter, line;
 
 
   /* Iteration */
+  line = (arg->id - 1) * arg->slicesz;
   for (iter = 0; iter < arg->iter; iter++) {
     actual = iter % 2;
     next = 1 - iter % 2;
 
-    if(pthread_mutex_lock(&slave_attr_array[(arg->id)-1].simulation_mutex) !=0) {
-      fprintf(stderr, "\nErro ao bloquear mutex\n");
-      pthread_exit(NULL);
-    }
     /* Calculate simulation */
     for (i = 0; i < arg->slicesz; i++) {
       for (j = 0; j < arg->N; j++) {
-        double val = (dm2dGetEntry(matrices[actual], i, j+1) +
-                      dm2dGetEntry(matrices[actual], i+2, j+1) +
-                      dm2dGetEntry(matrices[actual], i+1, j) +
-                      dm2dGetEntry(matrices[actual], i+1, j+2))/4;
-        dm2dSetEntry(matrices[next], i+1, j+1, val);
+        double val = (dm2dGetEntry(matrices[actual], line + i, j+1) +
+                      dm2dGetEntry(matrices[actual], line + i+2, j+1) +
+                      dm2dGetEntry(matrices[actual], line + i+1, j) +
+                      dm2dGetEntry(matrices[actual], line + i+1, j+2))/4;
+        dm2dSetEntry(matrices[next], line + i+1, j+1, val);
       }
     }
-    if(pthread_mutex_unlock(&slave_attr_array[(arg->id)-1].simulation_mutex) != 0) {
-      fprintf(stderr, "\nErro ao desbloquear mutex\n");
-      exit(1);
-    }
 
-    if(pthread_mutex_lock(&iteration_mutex) != 0) {
+    if(pthread_mutex_lock(&iteration_mutex[iter]) != 0) {
       fprintf(stderr, "\nErro ao bloquear mutex\n");
       pthread_exit(NULL);
     }
-    current_workers--;
-
-    if (current_workers == 0) {
-        if (pthread_cond_broadcast(&wait_for_workers) != 0) {
+    num_workers[iter]--;
+    
+    if (num_workers[iter] == 0) {
+        if (pthread_cond_broadcast(&wait_for_workers[iter]) != 0) {
           fprintf(stderr, "\nErro ao desbloquear variável de condição\n");
           pthread_exit(NULL);
         }
-        current_workers = arg->trab;
     } else {
-        while (current_workers > 0) {
-            if (pthread_cond_wait(&wait_for_workers, &iteration_mutex) != 0) {
+        while (num_workers[iter] > 0) {
+            if (pthread_cond_wait(&wait_for_workers[iter], &iteration_mutex[iter]) != 0) {
                 fprintf(stderr, "\nErro ao esperar pela variável de condição\n");
                 pthread_exit(NULL);
             }
         }
     }
-    if(pthread_mutex_unlock(&iteration_mutex) != 0) {
+    if(pthread_mutex_unlock(&iteration_mutex[iter]) != 0) {
       fprintf(stderr, "\nErro ao desbloquear mutex\n");
       exit(1);
     }
@@ -169,29 +154,20 @@ int main (int argc, char** argv) {
     return 1;
   }
 
-  /* Initialization of Mutexes and Condition Variables for each Worker*/
-  current_workers = trab;
-  slave_attr_array = (slave_attr*)malloc(sizeof(slave_attr)*trab);
-  for (i=0; i<trab; i++) {
-    if(pthread_mutex_init(&slave_attr_array[i].simulation_mutex, NULL) != 0) {
+  /* Initialization of Mutexes and Condition Variables for the Iterations*/
+  iteration_mutex = (pthread_mutex_t*)malloc(sizeof(pthread_mutex_t)*iter);
+  wait_for_workers = (pthread_cond_t*)malloc(sizeof(pthread_cond_t)*iter);
+  num_workers = (int*)malloc(sizeof(int)*iter);
+  for (i=0; i<iter; i++) {
+    if(pthread_mutex_init(&iteration_mutex[i], NULL) != 0) {
         fprintf(stderr, "\nErro ao inicializar mutex\n");
         exit(1);
     }
-    if(pthread_cond_init(&slave_attr_array[i].wait_for_simul, NULL) !=0) {
+    if(pthread_cond_init(&wait_for_workers[i], NULL) !=0) {
         fprintf(stderr, "\nErro ao inicializar a variável de condição\n");
         exit(1);
     }
-  }
-
-  /* Initialization of Mutexes and Condition Variables for the Iterations*/
-  if(pthread_mutex_init(&iteration_mutex, NULL) != 0) {
-    fprintf(stderr, "\nErro ao inicializar mutex\n");
-    exit(1);
-  }
-
-  if(pthread_cond_init(&wait_for_workers, NULL) != 0) {
-    fprintf(stderr, "\nErro ao inicializar variável de condição\n");
-    exit(1);
+    num_workers[i] = trab;
   }
 
   /* Calculate initial matrix */
@@ -243,23 +219,15 @@ int main (int argc, char** argv) {
   }
 
   /* Print resulting matrix */
-  dm2dPrint(matrices[0]);
+  dm2dPrint(matrices[iter%2]);
 
   /* Release memory */
-  if(pthread_mutex_destroy(&iteration_mutex) != 0) {
-    fprintf(stderr, "\nErro ao destruir mutex\n");
-    exit(1);
-  }
-  if(pthread_cond_destroy(&wait_for_workers) != 0) {
-    fprintf(stderr, "\nErro ao destruir variável de condição\n");
-    exit(1);
-  }
-  for(i=0; i<trab; i++) {
-    if(pthread_mutex_destroy(&slave_attr_array[i].simulation_mutex) != 0) {
+  for(i=0; i<iter; i++) {
+    if(pthread_mutex_destroy(&iteration_mutex[i]) != 0) {
       fprintf(stderr, "\nErro ao destruir mutex\n");
       exit(1);
     }
-    if(pthread_cond_destroy(&slave_attr_array[i].wait_for_simul) != 0) {
+    if(pthread_cond_destroy(&wait_for_workers[i]) != 0) {
       fprintf(stderr, "\nErro ao destruir variável de condição\n");
       exit(1);
     }
@@ -268,6 +236,8 @@ int main (int argc, char** argv) {
   dm2dFree(matrices[1]);
   free(slaves);
   free(slave_args);
-  free(slave_attr_array);
+  free(iteration_mutex);
+  free(wait_for_workers);
+  free(num_workers);
   return 0;
 }
