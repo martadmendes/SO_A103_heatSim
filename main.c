@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <pthread.h>
+#include <math.h>
 
 #include "matrix2d.h"
 #include "mplib3.h"
@@ -21,6 +22,7 @@ typedef struct argumentos_simul {
   int iter;
   int trab;
   int slicesz;
+  int maxD;
 } args_simul;
 
 typedef struct iteration_attributes {
@@ -44,6 +46,7 @@ iter_attr        *iter_attr_array;
 void *simul(void* args) {
   args_simul *arg = (args_simul *) args;
   int i, j, actual, next, iter, line;
+  double maxD, currD;
 
 
   /* Iteration */
@@ -51,6 +54,7 @@ void *simul(void* args) {
   for (iter = 0; iter < arg->iter; iter++) {
     actual = iter % 2;
     next = 1 - iter % 2;
+    maxD = 0;
 
     /* Calculate simulation */
     for (i = 0; i < arg->slicesz; i++) {
@@ -60,8 +64,19 @@ void *simul(void* args) {
                       dm2dGetEntry(matrices[actual], line + i+1, j) +
                       dm2dGetEntry(matrices[actual], line + i+1, j+2))/4;
         dm2dSetEntry(matrices[next], line + i+1, j+1, val);
+
+        currD = fabs(val - dm2dGetEntry(matrices[actual], line + i+1, j+1));
+        if (currD > maxD)
+          maxD = currD;
       }
     }
+
+    if (maxD < arg->maxD) 
+      iter_attr_array[iter].final_iteration = 1;
+
+    if (iter_attr_array[iter].final_iteration)
+      break;
+    
 
     /* Lock shared memory */
     if(pthread_mutex_lock(&iter_attr_array[iter].iteration_mutex) != 0) {
@@ -133,7 +148,7 @@ double parse_double_or_exit(char const *str, char const *name)
 
 int main (int argc, char** argv) {
 
-  if(argc != 9) {
+  if(argc != 10) {
     fprintf(stderr, "\nNumero invalido de argumentos.\n");
     fprintf(stderr, "Uso: heatSim N tEsq tSup tDir tInf iter trab csz\n\n");
     return 1;
@@ -149,19 +164,20 @@ int main (int argc, char** argv) {
   int iter = parse_integer_or_exit(argv[6], "iter");
   int trab = parse_integer_or_exit(argv[7], "trab");
   int csz = parse_integer_or_exit(argv[8], "csz");
+  double maxD = parse_double_or_exit(argv[9], "maxD");
 
-  int slicesz, i;
+  int slicesz, final_iteration, i;
   args_simul *slave_args;
   pthread_t *slaves;
 
   fprintf(stderr, "\nArgumentos:\n"
-	" N=%d tEsq=%.1f tSup=%.1f tDir=%.1f tInf=%.1f iter=%d trab=%d csz=%d\n",
-          N, tEsq, tSup, tDir, tInf, iter, trab, csz);
+	" N=%d tEsq=%.1f tSup=%.1f tDir=%.1f tInf=%.1f iter=%d trab=%d csz=%d maxD=%.2f\n",
+          N, tEsq, tSup, tDir, tInf, iter, trab, csz, maxD);
 
   /* Input verification */
-  if(N < 1 || tEsq < 0 || tSup < 0 || tDir < 0 || tInf < 0 || iter < 1 || trab < 1 || csz < 1) {
+  if(N < 1 || tEsq < 0 || tSup < 0 || tDir < 0 || tInf < 0 || iter < 1 || trab < 1 || csz < 1 || maxD < 0) {
     fprintf(stderr, "\nErro: Argumentos invalidos.\n"
-	" Lembrar que N >= 1, temperaturas >= 0, iter >= 1, trab >= 1 e csz >= 0\n\n");
+	" Lembrar que N >= 1, temperaturas >= 0, iter >= 1, trab >= 1, csz >= 1 e maxD >= 0\n\n");
     return 1;
   }
 
@@ -214,6 +230,7 @@ int main (int argc, char** argv) {
     slave_args[i].iter = iter;
     slave_args[i].trab = trab;
     slave_args[i].slicesz = slicesz;
+    slave_args[i].maxD = maxD;
     if (pthread_create(&slaves[i], NULL, simul, &slave_args[i]) != 0) {
       fprintf(stderr, "\nErro ao criar uma tarefa trabalhadora.\n");
       return -1;
@@ -228,8 +245,18 @@ int main (int argc, char** argv) {
     }
   }
 
+  /* Get final iteration number */
+  final_iteration = iter -1;
+  for (i = 0; i < iter; i++) 
+    if (iter_attr_array[i].final_iteration){
+      final_iteration = i;
+      printf("The final iteration is %d, skipping %d iterations", final_iteration + 1, iter - final_iteration - 1);
+      break;
+    }
+  
+
   /* Print resulting matrix */
-  dm2dPrint(matrices[iter%2]);
+  dm2dPrint(matrices[1-final_iteration%2]);
 
   /* Release memory */
   for(i=0; i<iter; i++) {
