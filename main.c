@@ -11,6 +11,10 @@
 #include "matrix2d.h"
 #include "mplib3.h"
 
+/*--------------------------------------------------------------------
+| Types
+---------------------------------------------------------------------*/
+
 typedef struct argumentos_simul {
   int id;
   int N;
@@ -19,6 +23,21 @@ typedef struct argumentos_simul {
   int slicesz;
 } args_simul;
 
+typedef struct slave_attributes {
+    pthread_mutex_t simulation_mutex;
+    pthred_cond_t wait_for_simul;
+} slave_attr;
+
+
+/*--------------------------------------------------------------------
+| Global Variables
+---------------------------------------------------------------------*/
+
+int              current_workers;
+DoubleMatrix2D   *matrices[2];
+pthread_mutex_t  iteration_mutex;
+pthread_cond_t   wait_for_workers;
+slave_attr       *slave_attr_array;
 
 /*--------------------------------------------------------------------
 | Function: simul
@@ -26,103 +45,58 @@ typedef struct argumentos_simul {
 
 void *simul(void* args) {
   args_simul *arg = (args_simul *) args;
-  DoubleMatrix2D *slices[2];
   int i, j, actual, next, msgsz, iter;
 
-  /* Create slices */
-  slices[0] = dm2dNew(arg->slicesz+2, arg->N+2);
-  slices[1] = dm2dNew(arg->slicesz+2, arg->N+2);
 
-  if (slices[0] == NULL || slices[1] == NULL) {
-    fprintf(stderr, "\nErro ao criar Matrix2d numa trabalhadora.\n");
-    exit(-1);
-  }
-  
-  /* Receive slice from master */
-  msgsz = (arg->N+2) * sizeof(double);
-  for (i = 0; i < arg->slicesz + 2; i++) {
-    if (receberMensagem(0, arg->id, dm2dGetLine(slices[0], i), msgsz) != msgsz) {
-      fprintf(stderr, "\nErro ao receber mensagem da tarefa mestre.\n");
-      exit(-1);
-    }
-  }
-
-  dm2dCopy(slices[1], slices[0]);
-  
   /* Iteration */
   for (iter = 0; iter < arg->iter; iter++) {
     actual = iter % 2;
     next = 1 - iter % 2;
 
+    if(pthread_mutex_lock(&slave_attr_array[(arg->id)-1].simulation_mutex) !=0) {
+      fprintf(stderr, "\nErro ao bloquear mutex\n");
+      pthread_exit(NULL);
+    }
     /* Calculate simulation */
     for (i = 0; i < arg->slicesz; i++) {
       for (j = 0; j < arg->N; j++) {
-        double val = (dm2dGetEntry(slices[actual], i, j+1) +
-                      dm2dGetEntry(slices[actual], i+2, j+1) +
-                      dm2dGetEntry(slices[actual], i+1, j) +
-                      dm2dGetEntry(slices[actual], i+1, j+2))/4;
-        dm2dSetEntry(slices[next], i+1, j+1, val);
+        double val = (dm2dGetEntry(matrices[actual], i, j+1) +
+                      dm2dGetEntry(matrices[actual], i+2, j+1) +
+                      dm2dGetEntry(matrices[actual], i+1, j) +
+                      dm2dGetEntry(matrices[actual], i+1, j+2))/4;
+        dm2dSetEntry(matrices[next], i+1, j+1, val);
       }
     }
+    if(pthread_mutex_unlock(&slave_attr_array[(arg->id)-1]) != 0) {
+      fprintf(stderr, "\nErro ao desbloquear mutex\n");
+      exit(1);
+    }
 
-    /* Exchange new values of adjacent lines. Even slaves send before receiving */
-    if (arg->id % 2 == 0) {
-      if (arg->id > 1) {
-        if (enviarMensagem(arg->id, arg->id - 1, dm2dGetLine(slices[next], 1), msgsz) != msgsz) {
-          fprintf(stderr, "\nErro ao enviar mensagem entre trabalhadoras.\n");
-          exit(-1);
+    if(pthread_mutex_lock(&iteration_mutex) != 0) {
+      fprintf(stderr, "\nErro ao bloquear mutex\n");
+      pthread_exit(NULL);
+    }
+    current_workers--;
+
+    if (current_workers == 0) {
+        if (pthread_cond_broadcast(&wait_for_workers) != 0) {
+          fprintf(stderr, "\nErro ao desbloquear variável de condição\n");
+          pthrad_exit(NULL);
         }
-        if (receberMensagem(arg->id - 1, arg->id, dm2dGetLine(slices[next], 0), msgsz) != msgsz) {
-          fprintf(stderr, "\nErro ao receber mensagem entre trabalhadoras.\n");
-          exit(-1);
-        }
-      }
-      if (arg->id < arg->trab) {
-        if (enviarMensagem(arg->id, arg->id + 1, dm2dGetLine(slices[next], arg->slicesz), msgsz) != msgsz) {
-          fprintf(stderr, "\nErro ao enviar mensagem entre trabalhadoras.\n");
-          exit(-1);
-        }
-        if (receberMensagem(arg->id + 1, arg->id, dm2dGetLine(slices[next], arg->slicesz + 1), msgsz) != msgsz) {
-          fprintf(stderr, "\nErro ao receber mensagem entre trabalhadoras.\n");
-          exit(-1);
-        }
-      }
+        current_workers = arg->trab;
     } else {
-      if (arg->id > 1) {
-        if (receberMensagem(arg->id - 1, arg->id, dm2dGetLine(slices[next], 0), msgsz) != msgsz) {
-          fprintf(stderr, "\nErro ao receber mensagem entre trabalhadoras.\n");
-          exit(-1);
+        while (current_workers > 0) {
+            if (pthread_cond_wait(&wait_for_workers, &iteration_mutex) != 0) {
+                fprintf(stderr, "\nErro ao esperar pela variável de condição\n");
+                pthread_exit(NULL);
+            }
         }
-        if (enviarMensagem(arg->id, arg->id - 1, dm2dGetLine(slices[next], 1), msgsz) != msgsz) {
-          fprintf(stderr, "\nErro ao enviar mensagem entre trabalhadoras\n");
-          exit(-1);
-        }
-      }
-      if (arg->id < arg->trab) {
-        if (receberMensagem(arg->id + 1, arg->id, dm2dGetLine(slices[next], arg->slicesz + 1), msgsz) != msgsz) {
-          fprintf(stderr, "\nErro ao receber mensagem entre trabalhadoras\n");
-          exit(-1);
-        }
-        if (enviarMensagem(arg->id, arg->id + 1, dm2dGetLine(slices[next], arg->slicesz), msgsz) != msgsz) {
-          fprintf(stderr, "\nErro ao enviar mensagem entre trabalhadoras\n");
-          exit(-1);
-        }
-      }
+    }
+    if(pthread_mutex_unlock(&iteration_mutex) != 0) {
+      fprintf(stderr, "\nErro ao desbloquear mutex\n");
+      exit(1);
     }
   }
-
-  /* Send final slices to master */
-  for (i = 0; i < arg->slicesz; i++) {
-    if (enviarMensagem(arg->id, 0, dm2dGetLine(slices[next], i + 1), msgsz) != msgsz) {
-      fprintf(stderr, "\nErro ao enviar mensagem à tarefa mestre.\n");
-      exit(-1);
-    }
-  }
-
-  /* Free memory */
-  dm2dFree(slices[0]);
-  dm2dFree(slices[1]);
-
   pthread_exit(NULL);
 }
 
@@ -180,11 +154,9 @@ int main (int argc, char** argv) {
   int trab = parse_integer_or_exit(argv[7], "trab");
   int csz = parse_integer_or_exit(argv[8], "csz");
 
-  DoubleMatrix2D *matrix;
-  int slicesz, msgsz, i, j; 
+  int slicesz, msgsz, i, j;
   args_simul *slave_args;
   pthread_t *slaves;
-
 
   fprintf(stderr, "\nArgumentos:\n"
 	" N=%d tEsq=%.1f tSup=%.1f tDir=%.1f tInf=%.1f iter=%d trab=%d csz=%d\n",
@@ -197,24 +169,45 @@ int main (int argc, char** argv) {
     return 1;
   }
 
-  /* Initialization of Message Passing Library */
-  if (inicializarMPlib(csz,trab+1) != 0) {
-    fprintf(stderr, "\nErro ao inicializar MPLib.\n");
-    return 1;
+  /* Initialization of Mutexes and Condition Variables for each Worker*/
+  current_workers = trab;
+  slave_attr_array = (slave_attr*)malloc(sizeof(slave_attr)*trab);
+  for (i=0; i<trab; i++) {
+    if(pthread_mutex_init(&slave_attr_array[i].simulation_mutex, NULL) != 0) {
+        fprintf(stderr, "\nErro ao inicializar mutex\n");
+        exit(1);
+    }
+    if(pthread_cond_init(&slave_attr_array[i].wait_for_simul, NULL) !=0) {
+        fprintf(stderr, "\nErro ao inicializar a variável de condição\n");
+        exit(1);
+    }
+  }
+
+  /* Initialization of Mutexes and Condition Variables for the Iterations*/
+  if(pthread_mutex_init(&iteration_mutex, NULL) != 0) {
+    fprintf(stderr, "\nErro ao inicializar mutex\n");
+    exit(1);
+  }
+
+  if(pthread_cond_init(&wait_for_workers, NULL) != 0) {
+    fprintf(stderr, "\nErro ao inicializar variável de condição\n");
+    exit(1);
   }
 
   /* Calculate initial matrix */
-  matrix = dm2dNew(N+2, N+2);
+  matrices[0] = dm2dNew(N+2, N+2);
+  matrices[1] = dm2dNew(N+2, N+2);
 
-  if (matrix == NULL) {
+  if (matrices[0] == NULL || matrices[1] == NULL) {
     fprintf(stderr, "\nErro: Nao foi possivel alocar memoria para a matriz.\n\n");
     return -1;
   }
 
-  dm2dSetLineTo (matrix, 0, tSup);
-  dm2dSetLineTo (matrix, N+1, tInf);
-  dm2dSetColumnTo (matrix, 0, tEsq);
-  dm2dSetColumnTo (matrix, N+1, tDir);
+  dm2dSetLineTo (matrices[0], 0, tSup);
+  dm2dSetLineTo (matrices[0], N+1, tInf);
+  dm2dSetColumnTo (matrices[0], 0, tEsq);
+  dm2dSetColumnTo (matrices[0], N+1, tDir);
+  dm2dCopy(matrices[1], matrices[0]);
 
   /* Calculate slice size */
   slicesz = N / trab;
@@ -241,28 +234,6 @@ int main (int argc, char** argv) {
     }
   }
 
-  /* Send slices to slaves */
-  msgsz = (N+2) * sizeof(double);
-  for (i = 0; i < trab; i++) {
-    for (j = 0; j < (slicesz + 2); j++) {
-      if (enviarMensagem(0, i+1, dm2dGetLine(matrix, i*slicesz + j), msgsz)
-          != msgsz) {
-        fprintf(stderr, "\nErro ao enviar mensagem para trabalhadora.\n");
-        return -1;
-      }
-    }
-  }
-  
-  /* Receive final slices of each slave and saves in matrix */
-  for (i = 0; i < trab; i++) {
-    for (j = 0; j < slicesz; j++) {
-      if (receberMensagem(i+1, 0, dm2dGetLine(matrix, i*slicesz + j + 1), msgsz) != msgsz) {
-        fprintf(stderr, "\nErro ao receber mensagem de uma trabalhadora.\n");
-        return -1;
-      }
-    }
-  }
-
   /* Esperar que os Escravos Terminem */
   for (i = 0; i < trab; i++) {
     if (pthread_join(slaves[i], NULL)) {
@@ -272,13 +243,31 @@ int main (int argc, char** argv) {
   }
 
   /* Print resulting matrix */
-  dm2dPrint(matrix);
+  dm2dPrint(matrices[0]);
 
   /* Release memory */
-  dm2dFree(matrix);
+  if(pthread_mutex_destroy(&iteration_mutex) != 0) {
+    fprintf(stderr, "\nErro ao destruir mutex\n");
+    exit(1);
+  }
+  if(pthread_cond_destroy(&wait_for_workers) != 0) {
+    fprintf(stderr, "\nErro ao destruir variável de condição\n");
+    exit(1);
+  }
+  for(i=0, i<trab, i++) {
+    if(pthread_mutex_destroy(&slave_attr_array[i].simulation_mutex) != 0) {
+      fprintf(stderr, "\nErro ao destruir mutex\n");
+      exit(1);
+    }
+    if(pthread_cond_destroy(&slave_attr_array[i].wait_for_simul != 0) {
+      fprintf(stderr, "\nErro ao destruir variável de condição\n");
+      exit(1);
+    }
+  }
+  dm2dFree(matrices[0]);
+  dm2dFree(matrices[1]);
   free(slaves);
   free(slave_args);
-  libertarMPlib();
-
+  free(slave_attr);
   return 0;
 }
