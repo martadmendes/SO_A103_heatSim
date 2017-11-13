@@ -23,14 +23,19 @@ typedef struct argumentos_simul {
   int slicesz;
 } args_simul;
 
+typedef struct iteration_attributes {
+  pthread_mutex_t iteration_mutex;
+  pthread_cond_t  wait_for_workers;
+  int             num_workers;
+  int             final_iteration;
+} iter_attr;
+
 /*--------------------------------------------------------------------
 | Global Variables
 ---------------------------------------------------------------------*/
 
 DoubleMatrix2D   *matrices[2];
-pthread_mutex_t  *iteration_mutex;
-pthread_cond_t   *wait_for_workers;
-int              *num_workers;
+iter_attr        *iter_attr_array;
 
 /*--------------------------------------------------------------------
 | Function: simul
@@ -58,26 +63,32 @@ void *simul(void* args) {
       }
     }
 
-    if(pthread_mutex_lock(&iteration_mutex[iter]) != 0) {
+    /* Lock shared memory */
+    if(pthread_mutex_lock(&iter_attr_array[iter].iteration_mutex) != 0) {
       fprintf(stderr, "\nErro ao bloquear mutex\n");
       pthread_exit(NULL);
     }
-    num_workers[iter]--;
+    /* Update worker counter per iteration */
+    iter_attr_array[iter].num_workers--;
     
-    if (num_workers[iter] == 0) {
-        if (pthread_cond_broadcast(&wait_for_workers[iter]) != 0) {
+    if (iter_attr_array[iter].num_workers == 0) {
+        /* Frees all waiting workers if this is last worker in iteration */
+        if (pthread_cond_broadcast(&iter_attr_array[iter].wait_for_workers) != 0) {
           fprintf(stderr, "\nErro ao desbloquear variável de condição\n");
           pthread_exit(NULL);
         }
     } else {
-        while (num_workers[iter] > 0) {
-            if (pthread_cond_wait(&wait_for_workers[iter], &iteration_mutex[iter]) != 0) {
+        /* If there are more workers on this iteration, wait for them */
+        while (iter_attr_array[iter].num_workers > 0) {
+            if (pthread_cond_wait(&iter_attr_array[iter].wait_for_workers,
+                                  &iter_attr_array[iter].iteration_mutex) != 0) {
                 fprintf(stderr, "\nErro ao esperar pela variável de condição\n");
                 pthread_exit(NULL);
             }
         }
     }
-    if(pthread_mutex_unlock(&iteration_mutex[iter]) != 0) {
+    /* Unlock shared memory */
+    if(pthread_mutex_unlock(&iter_attr_array[iter].iteration_mutex) != 0) {
       fprintf(stderr, "\nErro ao desbloquear mutex\n");
       exit(1);
     }
@@ -155,19 +166,18 @@ int main (int argc, char** argv) {
   }
 
   /* Initialization of Mutexes and Condition Variables for the Iterations*/
-  iteration_mutex = (pthread_mutex_t*)malloc(sizeof(pthread_mutex_t)*iter);
-  wait_for_workers = (pthread_cond_t*)malloc(sizeof(pthread_cond_t)*iter);
-  num_workers = (int*)malloc(sizeof(int)*iter);
+  iter_attr_array = (iter_attr*)malloc(sizeof(iter_attr)*iter);
   for (i=0; i<iter; i++) {
-    if(pthread_mutex_init(&iteration_mutex[i], NULL) != 0) {
+    if(pthread_mutex_init(&iter_attr_array[i].iteration_mutex, NULL) != 0) {
         fprintf(stderr, "\nErro ao inicializar mutex\n");
         exit(1);
     }
-    if(pthread_cond_init(&wait_for_workers[i], NULL) !=0) {
+    if(pthread_cond_init(&iter_attr_array[i].wait_for_workers, NULL) !=0) {
         fprintf(stderr, "\nErro ao inicializar a variável de condição\n");
         exit(1);
     }
-    num_workers[i] = trab;
+    iter_attr_array[i].num_workers = trab;
+    iter_attr_array[i].final_iteration = 0;
   }
 
   /* Calculate initial matrix */
@@ -223,11 +233,11 @@ int main (int argc, char** argv) {
 
   /* Release memory */
   for(i=0; i<iter; i++) {
-    if(pthread_mutex_destroy(&iteration_mutex[i]) != 0) {
+    if(pthread_mutex_destroy(&iter_attr_array[i].iteration_mutex) != 0) {
       fprintf(stderr, "\nErro ao destruir mutex\n");
       exit(1);
     }
-    if(pthread_cond_destroy(&wait_for_workers[i]) != 0) {
+    if(pthread_cond_destroy(&iter_attr_array[i].wait_for_workers) != 0) {
       fprintf(stderr, "\nErro ao destruir variável de condição\n");
       exit(1);
     }
@@ -236,8 +246,6 @@ int main (int argc, char** argv) {
   dm2dFree(matrices[1]);
   free(slaves);
   free(slave_args);
-  free(iteration_mutex);
-  free(wait_for_workers);
-  free(num_workers);
+  free(iter_attr_array);
   return 0;
 }
