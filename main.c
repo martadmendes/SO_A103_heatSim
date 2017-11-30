@@ -1,278 +1,290 @@
 /*
-// Projeto SO - exercicio 1, version 03
+// Projeto SO - exercicio 3
 // Sistemas Operativos, DEI/IST/ULisboa 2017-18
 */
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <errno.h>
 #include <pthread.h>
 #include <math.h>
 
 #include "matrix2d.h"
-#include "mplib3.h"
+#include "util.h"
 
 /*--------------------------------------------------------------------
-| Types
+| Type: thread_info
+| Description: Estrutura com Informacao para Trabalhadoras
 ---------------------------------------------------------------------*/
 
-typedef struct argumentos_simul {
-  int id;
-  int N;
-  int iter;
-  int trab;
-  int slicesz;
-  int maxD;
-} args_simul;
-
-typedef struct iteration_attributes {
-  pthread_mutex_t iteration_mutex;
-  pthread_cond_t  wait_for_workers;
-  int             num_workers;
-  int             final_iteration;
-} iter_attr;
+typedef struct {
+  int    id;
+  int    N;
+  int    iter;
+  int    trab;
+  int    tam_fatia;
+  double maxD;
+} thread_info;
 
 /*--------------------------------------------------------------------
-| Global Variables
+| Type: doubleBarrierWithMax
+| Description: Barreira dupla com variavel de max-reduction
 ---------------------------------------------------------------------*/
 
-DoubleMatrix2D   *matrices[2];
-iter_attr        *iter_attr_array;
+typedef struct {
+  int             total_nodes;
+  int             pending[2];
+  double          maxdelta[2];
+  int             iteracoes_concluidas;
+  pthread_mutex_t mutex;
+  pthread_cond_t  wait[2];
+} DualBarrierWithMax;
 
 /*--------------------------------------------------------------------
-| Function: simul
+| Global variables
 ---------------------------------------------------------------------*/
 
-void *simul(void* args) {
-  args_simul *arg = (args_simul *) args;
-  int i, j, actual, next, iter, line;
-  double maxD, currD;
+DoubleMatrix2D     *matrix_copies[2];
+DualBarrierWithMax *dual_barrier;
+double              maxD;
 
+/*--------------------------------------------------------------------
+| Function: dualBarrierInit
+| Description: Inicializa uma barreira dupla
+---------------------------------------------------------------------*/
 
-  /* Iteration */
-  line = (arg->id - 1) * arg->slicesz;
-  for (iter = 0; iter < arg->iter; iter++) {
-    actual = iter % 2;
-    next = 1 - iter % 2;
-    maxD = 0;
+DualBarrierWithMax *dualBarrierInit(int ntasks) {
+  DualBarrierWithMax *b;
+  b = (DualBarrierWithMax*) malloc (sizeof(DualBarrierWithMax));
+  if (b == NULL) return NULL;
 
-    /* Calculate simulation */
-    for (i = 0; i < arg->slicesz; i++) {
-      for (j = 0; j < arg->N; j++) {
-        double val = (dm2dGetEntry(matrices[actual], line + i, j+1) +
-                      dm2dGetEntry(matrices[actual], line + i+2, j+1) +
-                      dm2dGetEntry(matrices[actual], line + i+1, j) +
-                      dm2dGetEntry(matrices[actual], line + i+1, j+2))/4;
-        dm2dSetEntry(matrices[next], line + i+1, j+1, val);
+  b->total_nodes = ntasks;
+  b->pending[0]  = ntasks;
+  b->pending[1]  = ntasks;
+  b->maxdelta[0] = 0;
+  b->maxdelta[1] = 0;
+  b->iteracoes_concluidas = 0;
 
-        currD = fabs(val - dm2dGetEntry(matrices[actual], line + i+1, j+1));
-        if (currD > maxD)
-          maxD = currD;
-      }
-    }
+  if (pthread_mutex_init(&(b->mutex), NULL) != 0) {
+    fprintf(stderr, "\nErro a inicializar mutex\n");
+    exit(1);
+  }
+  if (pthread_cond_init(&(b->wait[0]), NULL) != 0) {
+    fprintf(stderr, "\nErro a inicializar variável de condição\n");
+    exit(1);
+  }
+  if (pthread_cond_init(&(b->wait[1]), NULL) != 0) {
+    fprintf(stderr, "\nErro a inicializar variável de condição\n");
+    exit(1);
+  }
+  return b;
+}
 
-    if (maxD < arg->maxD) 
-      iter_attr_array[iter].final_iteration = 1;
+/*--------------------------------------------------------------------
+| Function: dualBarrierFree
+| Description: Liberta os recursos de uma barreira dupla
+---------------------------------------------------------------------*/
 
-    if (iter_attr_array[iter].final_iteration)
-      break;
-    
+void dualBarrierFree(DualBarrierWithMax* b) {
+  if (pthread_mutex_destroy(&(b->mutex)) != 0) {
+    fprintf(stderr, "\nErro a destruir mutex\n");
+    exit(1);
+  }
+  if (pthread_cond_destroy(&(b->wait[0])) != 0) {
+    fprintf(stderr, "\nErro a destruir variável de condição\n");
+    exit(1);
+  }
+  if (pthread_cond_destroy(&(b->wait[1])) != 0) {
+    fprintf(stderr, "\nErro a destruir variável de condição\n");
+    exit(1);
+  }
+  free(b);
+}
 
-    /* Lock shared memory */
-    if(pthread_mutex_lock(&iter_attr_array[iter].iteration_mutex) != 0) {
-      fprintf(stderr, "\nErro ao bloquear mutex\n");
-      pthread_exit(NULL);
-    }
-    /* Update worker counter per iteration */
-    iter_attr_array[iter].num_workers--;
-    
-    if (iter_attr_array[iter].num_workers == 0) {
-        /* Frees all waiting workers if this is last worker in iteration */
-        if (pthread_cond_broadcast(&iter_attr_array[iter].wait_for_workers) != 0) {
-          fprintf(stderr, "\nErro ao desbloquear variável de condição\n");
-          pthread_exit(NULL);
-        }
-    } else {
-        /* If there are more workers on this iteration, wait for them */
-        while (iter_attr_array[iter].num_workers > 0) {
-            if (pthread_cond_wait(&iter_attr_array[iter].wait_for_workers,
-                                  &iter_attr_array[iter].iteration_mutex) != 0) {
-                fprintf(stderr, "\nErro ao esperar pela variável de condição\n");
-                pthread_exit(NULL);
-            }
-        }
-    }
-    /* Unlock shared memory */
-    if(pthread_mutex_unlock(&iter_attr_array[iter].iteration_mutex) != 0) {
-      fprintf(stderr, "\nErro ao desbloquear mutex\n");
+/*--------------------------------------------------------------------
+| Function: dualBarrierWait
+| Description: Ao chamar esta funcao, a tarefa fica bloqueada ate que
+|              o numero 'ntasks' de tarefas necessario tenham chamado
+|              esta funcao, especificado ao ininializar a barreira em
+|              dualBarrierInit(ntasks). Esta funcao tambem calcula o
+|              delta maximo entre todas as threads e devolve o
+|              resultado no valor de retorno
+---------------------------------------------------------------------*/
+
+double dualBarrierWait (DualBarrierWithMax* b, int current, double localmax) {
+  int next = 1 - current;
+  if (pthread_mutex_lock(&(b->mutex)) != 0) {
+    fprintf(stderr, "\nErro a bloquear mutex\n");
+    exit(1);
+  }
+  // decrementar contador de tarefas restantes
+  b->pending[current]--;
+  // actualizar valor maxDelta entre todas as threads
+  if (b->maxdelta[current]<localmax)
+    b->maxdelta[current]=localmax;
+  // verificar se sou a ultima tarefa
+  if (b->pending[current]==0) {
+    // sim -- inicializar proxima barreira e libertar threads
+    b->iteracoes_concluidas++;
+    b->pending[next]  = b->total_nodes;
+    b->maxdelta[next] = 0;
+    if (pthread_cond_broadcast(&(b->wait[current])) != 0) {
+      fprintf(stderr, "\nErro a assinalar todos em variável de condição\n");
       exit(1);
     }
   }
-  pthread_exit(NULL);
+  else {
+    // nao -- esperar pelas outras tarefas
+    while (b->pending[current]>0) {
+      if (pthread_cond_wait(&(b->wait[current]), &(b->mutex)) != 0) {
+        fprintf(stderr, "\nErro a esperar em variável de condição\n");
+        exit(1);
+      }
+    }
+  }
+  double maxdelta = b->maxdelta[current];
+  if (pthread_mutex_unlock(&(b->mutex)) != 0) {
+    fprintf(stderr, "\nErro a desbloquear mutex\n");
+    exit(1);
+  }
+  return maxdelta;
 }
 
 /*--------------------------------------------------------------------
-| Function: parse_integer_or_exit
+| Function: tarefa_trabalhadora
+| Description: Funcao executada por cada tarefa trabalhadora.
+|              Recebe como argumento uma estrutura do tipo thread_info
 ---------------------------------------------------------------------*/
 
-int parse_integer_or_exit(char const *str, char const *name)
-{
-  int value;
+void *tarefa_trabalhadora(void *args) {
+  thread_info *tinfo = (thread_info *) args;
+  int tam_fatia = tinfo->tam_fatia;
+  int my_base = tinfo->id * tam_fatia;
+  double global_delta = INFINITY;
+  int iter = 0;
 
-  if(sscanf(str, "%d", &value) != 1) {
-    fprintf(stderr, "\nErro no argumento \"%s\".\n\n", name);
-    exit(1);
-  }
-  return value;
+  do {
+    int atual = iter % 2;
+    int prox = 1 - iter % 2;
+    double max_delta = 0;
+
+    // Calcular Pontos Internos
+    for (int i = my_base; i < my_base + tinfo->tam_fatia; i++) {
+      for (int j = 0; j < tinfo->N; j++) {
+        double val = (dm2dGetEntry(matrix_copies[atual], i,   j+1) +
+                      dm2dGetEntry(matrix_copies[atual], i+2, j+1) +
+                      dm2dGetEntry(matrix_copies[atual], i+1, j) +
+                      dm2dGetEntry(matrix_copies[atual], i+1, j+2))/4;
+        // calcular delta
+        double delta = fabs(val - dm2dGetEntry(matrix_copies[atual], i+1, j+1));
+        if (delta > max_delta) {
+          max_delta = delta;
+        }
+        dm2dSetEntry(matrix_copies[prox], i+1, j+1, val);
+      }
+    }
+    // barreira de sincronizacao; calcular delta global
+    global_delta = dualBarrierWait(dual_barrier, atual, max_delta);
+  } while (++iter < tinfo->iter && global_delta >= tinfo->maxD);
+
+  return 0;
 }
-
-/*--------------------------------------------------------------------
-| Function: parse_double_or_exit
----------------------------------------------------------------------*/
-
-double parse_double_or_exit(char const *str, char const *name)
-{
-  double value;
-
-  if(sscanf(str, "%lf", &value) != 1) {
-    fprintf(stderr, "\nErro no argumento \"%s\".\n\n", name);
-    exit(1);
-  }
-  return value;
-}
-
 
 /*--------------------------------------------------------------------
 | Function: main
+| Description: Entrada do programa
 ---------------------------------------------------------------------*/
 
 int main (int argc, char** argv) {
+  int N;
+  double tEsq, tSup, tDir, tInf;
+  int iter, trab;
+  int tam_fatia;
+  int res;
 
-  if(argc != 10) {
-    fprintf(stderr, "\nNumero invalido de argumentos.\n");
-    fprintf(stderr, "Uso: heatSim N tEsq tSup tDir tInf iter trab csz\n\n");
-    return 1;
+  if (argc != 9) {
+    fprintf(stderr, "Utilizacao: ./heatSim N tEsq tSup tDir tInf iter trab maxD\n\n");
+    die("Numero de argumentos invalido");
   }
 
-  /* Read input */
-  /* argv[0] = program name */
-  int N = parse_integer_or_exit(argv[1], "N");
-  double tEsq = parse_double_or_exit(argv[2], "tEsq");
-  double tSup = parse_double_or_exit(argv[3], "tSup");
-  double tDir = parse_double_or_exit(argv[4], "tDir");
-  double tInf = parse_double_or_exit(argv[5], "tInf");
-  int iter = parse_integer_or_exit(argv[6], "iter");
-  int trab = parse_integer_or_exit(argv[7], "trab");
-  int csz = parse_integer_or_exit(argv[8], "csz");
-  double maxD = parse_double_or_exit(argv[9], "maxD");
+  // Ler Input
+  N    = parse_integer_or_exit(argv[1], "N",    1);
+  tEsq = parse_double_or_exit (argv[2], "tEsq", 0);
+  tSup = parse_double_or_exit (argv[3], "tSup", 0);
+  tDir = parse_double_or_exit (argv[4], "tDir", 0);
+  tInf = parse_double_or_exit (argv[5], "tInf", 0);
+  iter = parse_integer_or_exit(argv[6], "iter", 1);
+  trab = parse_integer_or_exit(argv[7], "trab", 1);
+  maxD = parse_double_or_exit (argv[8], "maxD", 0);
 
-  int slicesz, final_iteration, i;
-  args_simul *slave_args;
-  pthread_t *slaves;
+  //fprintf(stderr, "\nArgumentos:\n"
+  // " N=d tEsq=%.1f tSup=%.1f tDir=%.1f tInf=%.1f iter=%d trab=%d csz=%d",
+  // N, tEsq, tSup, tDir, tInf, iter, trab, csz);
 
-  fprintf(stderr, "\nArgumentos:\n"
-	" N=%d tEsq=%.1f tSup=%.1f tDir=%.1f tInf=%.1f iter=%d trab=%d csz=%d maxD=%.2f\n",
-          N, tEsq, tSup, tDir, tInf, iter, trab, csz, maxD);
-
-  /* Input verification */
-  if(N < 1 || tEsq < 0 || tSup < 0 || tDir < 0 || tInf < 0 || iter < 1 || trab < 1 || csz < 1 || maxD < 0) {
-    fprintf(stderr, "\nErro: Argumentos invalidos.\n"
-	" Lembrar que N >= 1, temperaturas >= 0, iter >= 1, trab >= 1, csz >= 1 e maxD >= 0\n\n");
-    return 1;
-  }
-
-  /* Initialization of Mutexes and Condition Variables for the Iterations*/
-  iter_attr_array = (iter_attr*)malloc(sizeof(iter_attr)*iter);
-  for (i=0; i<iter; i++) {
-    if(pthread_mutex_init(&iter_attr_array[i].iteration_mutex, NULL) != 0) {
-        fprintf(stderr, "\nErro ao inicializar mutex\n");
-        exit(1);
-    }
-    if(pthread_cond_init(&iter_attr_array[i].wait_for_workers, NULL) !=0) {
-        fprintf(stderr, "\nErro ao inicializar a variável de condição\n");
-        exit(1);
-    }
-    iter_attr_array[i].num_workers = trab;
-    iter_attr_array[i].final_iteration = 0;
-  }
-
-  /* Calculate initial matrix */
-  matrices[0] = dm2dNew(N+2, N+2);
-  matrices[1] = dm2dNew(N+2, N+2);
-
-  if (matrices[0] == NULL || matrices[1] == NULL) {
-    fprintf(stderr, "\nErro: Nao foi possivel alocar memoria para a matriz.\n\n");
+  if (N % trab != 0) {
+    fprintf(stderr, "\nErro: Argumento %s e %s invalidos.\n"
+                    "%s deve ser multiplo de %s.", "N", "trab", "N", "trab");
     return -1;
   }
 
-  dm2dSetLineTo (matrices[0], 0, tSup);
-  dm2dSetLineTo (matrices[0], N+1, tInf);
-  dm2dSetColumnTo (matrices[0], 0, tEsq);
-  dm2dSetColumnTo (matrices[0], N+1, tDir);
-  dm2dCopy(matrices[1], matrices[0]);
+  // Inicializar Barreira
+  dual_barrier = dualBarrierInit(trab);
+  if (dual_barrier == NULL)
+    die("Nao foi possivel inicializar barreira");
 
-  /* Calculate slice size */
-  slicesz = N / trab;
+  // Calcular tamanho de cada fatia
+  tam_fatia = N / trab;
 
-  /* Memory allocation for slaves and args */
-  slaves     = (pthread_t*)malloc(trab*sizeof(pthread_t));
-  slave_args = (args_simul*)malloc(trab*sizeof(args_simul));
-
-  if (slaves == NULL || slave_args == NULL) {
-    fprintf(stderr, "\nErro ao alocar memória para trabalhadoras.\n");
-    return -1;
+  // Criar e Inicializar Matrizes
+  matrix_copies[0] = dm2dNew(N+2,N+2);
+  matrix_copies[1] = dm2dNew(N+2,N+2);
+  if (matrix_copies[0] == NULL || matrix_copies[1] == NULL) {
+    die("Erro ao criar matrizes");
   }
 
-  /* Create slaves and args */
-  for (i=0; i<trab; i++) {
-    slave_args[i].id = i+1;
-    slave_args[i].N = N;
-    slave_args[i].iter = iter;
-    slave_args[i].trab = trab;
-    slave_args[i].slicesz = slicesz;
-    slave_args[i].maxD = maxD;
-    if (pthread_create(&slaves[i], NULL, simul, &slave_args[i]) != 0) {
-      fprintf(stderr, "\nErro ao criar uma tarefa trabalhadora.\n");
-      return -1;
+  dm2dSetLineTo (matrix_copies[0], 0, tSup);
+  dm2dSetLineTo (matrix_copies[0], N+1, tInf);
+  dm2dSetColumnTo (matrix_copies[0], 0, tEsq);
+  dm2dSetColumnTo (matrix_copies[0], N+1, tDir);
+  dm2dCopy (matrix_copies[1],matrix_copies[0]);
+
+  // Reservar memoria para trabalhadoras
+  thread_info *tinfo = (thread_info*) malloc(trab * sizeof(thread_info));
+  pthread_t *trabalhadoras = (pthread_t*) malloc(trab * sizeof(pthread_t));
+
+  if (tinfo == NULL || trabalhadoras == NULL) {
+    die("Erro ao alocar memoria para trabalhadoras");
+  }
+
+  // Criar trabalhadoras
+  for (int i=0; i < trab; i++) {
+    tinfo[i].id = i;
+    tinfo[i].N = N;
+    tinfo[i].iter = iter;
+    tinfo[i].trab = trab;
+    tinfo[i].tam_fatia = tam_fatia;
+    tinfo[i].maxD = maxD;
+    res = pthread_create(&trabalhadoras[i], NULL, tarefa_trabalhadora, &tinfo[i]);
+    if (res != 0) {
+      die("Erro ao criar uma tarefa trabalhadora");
     }
   }
 
-  /* Esperar que os Escravos Terminem */
-  for (i = 0; i < trab; i++) {
-    if (pthread_join(slaves[i], NULL)) {
-      fprintf(stderr, "\nErro ao esperar por um escravo.\n");
-      return -1;
-    }
+  // Esperar que as trabalhadoras terminem
+  for (int i=0; i<trab; i++) {
+    res = pthread_join(trabalhadoras[i], NULL);
+    if (res != 0)
+      die("Erro ao esperar por uma tarefa trabalhadora");
   }
 
-  /* Get final iteration number */
-  final_iteration = iter -1;
-  for (i = 0; i < iter; i++) 
-    if (iter_attr_array[i].final_iteration){
-      final_iteration = i;
-      printf("The final iteration is %d, skipping %d iterations", final_iteration + 1, iter - final_iteration - 1);
-      break;
-    }
+  dm2dPrint (matrix_copies[dual_barrier->iteracoes_concluidas%2]);
+
+  // Libertar memoria
+  dm2dFree(matrix_copies[0]);
+  dm2dFree(matrix_copies[1]);
+  free(tinfo);
+  free(trabalhadoras);
+  dualBarrierFree(dual_barrier);
   
-
-  /* Print resulting matrix */
-  dm2dPrint(matrices[1-final_iteration%2]);
-
-  /* Release memory */
-  for(i=0; i<iter; i++) {
-    if(pthread_mutex_destroy(&iter_attr_array[i].iteration_mutex) != 0) {
-      fprintf(stderr, "\nErro ao destruir mutex\n");
-      exit(1);
-    }
-    if(pthread_cond_destroy(&iter_attr_array[i].wait_for_workers) != 0) {
-      fprintf(stderr, "\nErro ao destruir variável de condição\n");
-      exit(1);
-    }
-  }
-  dm2dFree(matrices[0]);
-  dm2dFree(matrices[1]);
-  free(slaves);
-  free(slave_args);
-  free(iter_attr_array);
   return 0;
 }
+ 
