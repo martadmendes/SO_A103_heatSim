@@ -1,5 +1,5 @@
 /*
-// Bibliotece de matrizes 2D alocadas dinamicamente, versao 3
+// Biblioteca de matrizes 2D alocadas dinamicamente, versao 4
 // Sistemas Operativos, DEI/IST/ULisboa 2017-18
 */
 
@@ -107,3 +107,34 @@ void dm2dPrint (DoubleMatrix2D *matrix) {
   }
 }
 
+
+/*--------------------------------------------------------------------
+| Function: readMatrix2dFromFile
+---------------------------------------------------------------------*/
+DoubleMatrix2D *readMatrix2dFromFile(FILE *f, int l, int c) {
+  int i, j;
+  double v;
+  DoubleMatrix2D *m;
+
+  if (f == NULL || l<1 || c<1)
+    return NULL;
+
+  m = dm2dNew(l, c);
+  if (m==NULL)
+    return NULL;
+  
+  //Ler pontos da matriz
+  //Nesta implementacao, ignora a existencia e posicionamento
+  //de quebras de linha
+  for (i = 0; i < l; i++) {
+    for (j = 0; j < c; j++) {
+      if (fscanf(f, "%lf", &v) != 1) {
+      	dm2dFree(m);
+      	return NULL;
+      }
+      dm2dSetEntry(m, i, j, v);
+    }
+  }
+
+  return m;
+}
