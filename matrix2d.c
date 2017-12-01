@@ -142,11 +142,11 @@ DoubleMatrix2D *readMatrix2dFromFile(FILE *f, int l, int c) {
 /*--------------------------------------------------------------------
 | Function: dm2dPrintToFile
 ---------------------------------------------------------------------*/
-void *dm2dPrintToFile(DoubleMatrix2D *m, FILE *fp, int l, int c) {
+void dm2dPrintToFile(DoubleMatrix2D *m, FILE *fp, int l, int c) {
   int i, j;
-  
+
   if (m == NULL || fp == NULL || l<1 || c<1)
-    return NULL;
+    return;
 
   for (i = 0; i < l; i++) {
     for (j = 0; j < c; j++) {
