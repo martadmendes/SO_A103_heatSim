@@ -150,10 +150,11 @@ void dm2dPrintToFile(DoubleMatrix2D *m, FILE *fp, int l, int c) {
 
   for (i = 0; i < l; i++) {
     for (j = 0; j < c; j++) {
+        fprintf(fp, "%.4f", dm2dGetEntry(m, i, j));
         if (j == c-1 && i != l-1)
-            fprintf(fp, "%.4f \n", dm2dGetEntry(m, i, j));
+            fprintf(fp, "\n");
         else if (j != c-1)
-            fprintf(fp, "%.4f ", dm2dGetEntry(m, i, j)); //mas se o fopen é w+ nao cria um novo everytime?
+            fprintf(fp, " "); //mas se o fopen é w+ nao cria um novo everytime?
     }
   }
 }
