@@ -200,9 +200,14 @@ int main (int argc, char** argv) {
   int iter, trab;
   int tam_fatia;
   int res;
+  char* fichS;
+  int periodoS;
 
-  if (argc != 9) {
-    fprintf(stderr, "Utilizacao: ./heatSim N tEsq tSup tDir tInf iter trab maxD\n\n");
+  FILE * fp;
+  fp = fopen ("results.txt", "w+");
+
+  if (argc != 11) {
+    fprintf(stderr, "Utilizacao: ./heatSim N tEsq tSup tDir tInf iter trab maxD fichS periodoS\n\n");
     die("Numero de argumentos invalido");
   }
 
@@ -215,6 +220,8 @@ int main (int argc, char** argv) {
   iter = parse_integer_or_exit(argv[6], "iter", 1);
   trab = parse_integer_or_exit(argv[7], "trab", 1);
   maxD = parse_double_or_exit (argv[8], "maxD", 0);
+  fichS = argv[9];
+  periodoS = parse_integer_or_exit (argv[10], "periodoS", 1);
 
   //fprintf(stderr, "\nArgumentos:\n"
   // " N=d tEsq=%.1f tSup=%.1f tDir=%.1f tInf=%.1f iter=%d trab=%d csz=%d",
@@ -223,6 +230,12 @@ int main (int argc, char** argv) {
   if (N % trab != 0) {
     fprintf(stderr, "\nErro: Argumento %s e %s invalidos.\n"
                     "%s deve ser multiplo de %s.", "N", "trab", "N", "trab");
+    return -1;
+  }
+
+  if (periodoS < 0) {
+    fprintf(stderr, "\nErro: Argumento %s invalido.\n"
+                    "%s deve ser >= 0.", "periodoS", "periodoS");
     return -1;
   }
 
@@ -284,7 +297,8 @@ int main (int argc, char** argv) {
   free(tinfo);
   free(trabalhadoras);
   dualBarrierFree(dual_barrier);
-  
+
+  fclose(fp);
+
   return 0;
 }
- 

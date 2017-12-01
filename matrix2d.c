@@ -138,3 +138,19 @@ DoubleMatrix2D *readMatrix2dFromFile(FILE *f, int l, int c) {
 
   return m;
 }
+
+/*--------------------------------------------------------------------
+| Function: dm2dPrintToFile
+---------------------------------------------------------------------*/
+void *dm2dPrintToFile(DoubleMatrix2D *m, FILE *fp, int l, int c) {
+  int i, j;
+  
+  if (m == NULL || fp == NULL || l<1 || c<1)
+    return NULL;
+
+  for (i = 0; i < l; i++) {
+    for (j = 0; j < c; j++) {
+      fprintf(fp, "%.4f", dm2dGetEntry(m, i, j)); //mas se o fopen é w+ nao cria um novo everytime?
+    }
+  }
+}
