@@ -46,6 +46,7 @@ typedef struct {
 DoubleMatrix2D     *matrix_copies[2];
 DualBarrierWithMax *dual_barrier;
 double              maxD;
+FILE               *file;
 
 /*--------------------------------------------------------------------
 | Function: dualBarrierInit
@@ -150,6 +151,42 @@ double dualBarrierWait (DualBarrierWithMax* b, int current, double localmax) {
 }
 
 /*--------------------------------------------------------------------
+| Function: inicializar_matrizes
+| Description: Funcao executada pela tarefa mestre para inicializar as
+|              matrizes. As matrizes sao inicializadas dependendo se 
+|              existir o ficheiro passado como argumento. Retorna o
+|              file descriptor aberto.
+---------------------------------------------------------------------*/
+
+FILE *inicializar_matrizes(char *fich_nome, int N, int tSup, int tInf,
+                           int tEsq, int tDir) {
+  FILE *fp;
+  fp = fopen(fich_nome, "r");
+  if (fp != NULL) {
+    matrix_copies[0] = readMatrix2dFromFile(fp, N+2, N+2);
+    matrix_copies[1] = dm2dNew(N+2, N+2);
+    dm2dCopy (matrix_copies[1],matrix_copies[0]);
+    fclose(fp);
+  } else {
+    matrix_copies[0] = dm2dNew(N+2,N+2);
+    matrix_copies[1] = dm2dNew(N+2,N+2);
+    if (matrix_copies[0] == NULL || matrix_copies[1] == NULL) {
+      die("Erro ao criar matrizes");
+    }
+
+    dm2dSetLineTo (matrix_copies[0], 0, tSup);
+    dm2dSetLineTo (matrix_copies[0], N+1, tInf);
+    dm2dSetColumnTo (matrix_copies[0], 0, tEsq);
+    dm2dSetColumnTo (matrix_copies[0], N+1, tDir);
+    dm2dCopy (matrix_copies[1],matrix_copies[0]);
+  }
+  fp = fopen(fich_nome, "w");
+  if (fp == NULL)
+    die("Erro ao abrir ficheiro");
+  return fp;
+}
+
+/*--------------------------------------------------------------------
 | Function: tarefa_trabalhadora
 | Description: Funcao executada por cada tarefa trabalhadora.
 |              Recebe como argumento uma estrutura do tipo thread_info
@@ -203,9 +240,6 @@ int main (int argc, char** argv) {
   char* fichS;
   int periodoS;
 
-  FILE * fp;
-  fp = fopen ("results.txt", "w+");
-
   if (argc != 11) {
     fprintf(stderr, "Utilizacao: ./heatSim N tEsq tSup tDir tInf iter trab maxD fichS periodoS\n\n");
     die("Numero de argumentos invalido");
@@ -247,18 +281,7 @@ int main (int argc, char** argv) {
   // Calcular tamanho de cada fatia
   tam_fatia = N / trab;
 
-  // Criar e Inicializar Matrizes
-  matrix_copies[0] = dm2dNew(N+2,N+2);
-  matrix_copies[1] = dm2dNew(N+2,N+2);
-  if (matrix_copies[0] == NULL || matrix_copies[1] == NULL) {
-    die("Erro ao criar matrizes");
-  }
-
-  dm2dSetLineTo (matrix_copies[0], 0, tSup);
-  dm2dSetLineTo (matrix_copies[0], N+1, tInf);
-  dm2dSetColumnTo (matrix_copies[0], 0, tEsq);
-  dm2dSetColumnTo (matrix_copies[0], N+1, tDir);
-  dm2dCopy (matrix_copies[1],matrix_copies[0]);
+  file = inicializar_matrizes(fichS, N, tSup, tInf, tEsq, tDir);
 
   // Reservar memoria para trabalhadoras
   thread_info *tinfo = (thread_info*) malloc(trab * sizeof(thread_info));
@@ -298,7 +321,7 @@ int main (int argc, char** argv) {
   free(trabalhadoras);
   dualBarrierFree(dual_barrier);
 
-  fclose(fp);
+  fclose(file);
 
   return 0;
 }
