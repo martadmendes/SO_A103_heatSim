@@ -265,8 +265,9 @@ void timerHandler() {
     printing = 1;
   } else {
     fprintf(stderr, "Erro ao criar processo paralelo.\n");
-    return;
+    exit(-1);
   }
+  exit(0);
 }
 
 /*--------------------------------------------------------------------
@@ -275,13 +276,14 @@ void timerHandler() {
 ---------------------------------------------------------------------*/
 
 void handleThis() {
-  fclose(file);
+  printf("SIGINT caught\n");
   file = fopen(fichS, "w");
   if (file == NULL)
     die("Erro ao abrir ficheiro");
   dm2dPrintToFile(matrix_copies[atual_global], file, N+2, N+2);
-  kill(main_pid, SIGINT);
-  return;
+  fclose(file);
+  kill(main_pid, SIGKILL);
+  exit(0);
 }
 
 /*--------------------------------------------------------------------
