@@ -234,18 +234,19 @@ void *tarefa_trabalhadora(void *args) {
     global_delta = dualBarrierWait(dual_barrier, atual, max_delta);
 
     if (salvaguarda && tinfo->id == 1) {
-      pid = fork();
-      if (pid == 0) {
-        if (periodo_counter == 0) {
-          dm2dPrintToFile(matrix_copies[atual], file, tinfo->N +2, tinfo->N +2);
-          periodo_counter = tinfo->periodoS;
-        } else periodo_counter--;
-      } else if (pid > 0) {
-        num_salvaguardas++;
-      } else {
-          fprintf(stderr, "Erro ao criar processo paralelo.\n");
-          return NULL;
-      }
+      if (periodo_counter == 0) {
+        pid = fork();
+        if (pid == 0) {
+            dm2dPrintToFile(matrix_copies[atual], file, tinfo->N +2, tinfo->N +2);
+            periodo_counter = tinfo->periodoS;
+            exit(1);
+        } else if (pid > 0) {
+          num_salvaguardas++;
+        } else {
+            fprintf(stderr, "Erro ao criar processo paralelo.\n");
+            return NULL;
+        }
+      } else periodo_counter--;
     }
   } while (++iter < tinfo->iter && global_delta >= tinfo->maxD);
 
@@ -333,6 +334,7 @@ int main (int argc, char** argv) {
     tinfo[i].trab = trab;
     tinfo[i].tam_fatia = tam_fatia;
     tinfo[i].maxD = maxD;
+    tinfo[i].periodoS = periodoS;
     res = pthread_create(&trabalhadoras[i], NULL, tarefa_trabalhadora, &tinfo[i]);
     if (res != 0) {
       die("Erro ao criar uma tarefa trabalhadora");
