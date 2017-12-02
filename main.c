@@ -238,10 +238,10 @@ void *tarefa_trabalhadora(void *args) {
         pid = fork();
         if (pid == 0) {
             dm2dPrintToFile(matrix_copies[atual], file, tinfo->N +2, tinfo->N +2);
-            periodo_counter = tinfo->periodoS;
             exit(1);
         } else if (pid > 0) {
           num_salvaguardas++;
+          periodo_counter = tinfo->periodoS;
         } else {
             fprintf(stderr, "Erro ao criar processo paralelo.\n");
             return NULL;
@@ -253,6 +253,7 @@ void *tarefa_trabalhadora(void *args) {
   if (tinfo->id == 1){
     while (num_salvaguardas > 0){
       wait(&status);
+      num_salvagudardas--;
     }
   }
 
