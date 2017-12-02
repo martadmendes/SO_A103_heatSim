@@ -4,10 +4,14 @@
 */
 
 #include <stdio.h>
+#include <string.h>
 #include <stdlib.h>
 #include <pthread.h>
 #include <math.h>
 #include <unistd.h>
+#include <signal.h>
+#include <sys/wait.h>
+#include <sys/errno.h>
 
 #include "matrix2d.h"
 #include "util.h"
@@ -51,6 +55,9 @@ double              maxD;
 FILE               *file;
 int                 salvaguarda = 1;
 char               *fichS;
+int                 atual_global;
+pid_t               main_pid;
+int                 N;
 
 /*--------------------------------------------------------------------
 | Function: dualBarrierInit
@@ -162,8 +169,8 @@ double dualBarrierWait (DualBarrierWithMax* b, int current, double localmax) {
 |              file descriptor aberto.
 ---------------------------------------------------------------------*/
 
-FILE *inicializar_matrizes(int N, int tSup, int tInf,
-                           int tEsq, int tDir, int periodoS) {
+void inicializar_matrizes(int N, int tSup, int tInf,
+                           int tEsq, int tDir) {
   FILE *fp;
   fp = fopen(fichS, "r");
   if (fp != NULL) {
@@ -184,12 +191,6 @@ FILE *inicializar_matrizes(int N, int tSup, int tInf,
     dm2dSetColumnTo (matrix_copies[0], N+1, tDir);
     dm2dCopy (matrix_copies[1],matrix_copies[0]);
   }
-  if (periodoS > 0) {
-    fp = fopen(fichS, "w");
-    if (fp == NULL)
-      die("Erro ao abrir ficheiro");
-  }
-  return fp;
 }
 
 /*--------------------------------------------------------------------
@@ -204,10 +205,15 @@ void *tarefa_trabalhadora(void *args) {
   int my_base = tinfo->id * tam_fatia;
   double global_delta = INFINITY;
   int iter = 0;
+
   int periodo_counter = tinfo->periodoS;
   pid_t pid;
   int status;
   int num_salvaguardas = 0;
+
+  char buffer[256] = "";
+  strcat(buffer, fichS);
+  strcat(buffer, "~");
 
   do {
     int atual = iter % 2;
@@ -231,16 +237,18 @@ void *tarefa_trabalhadora(void *args) {
     }
     // barreira de sincronizacao; calcular delta global
     global_delta = dualBarrierWait(dual_barrier, atual, max_delta);
+    atual_global = prox;
 
     if (salvaguarda && tinfo->id == 1) {
-      if (periodo_counter == 0) {
+      if(periodo_counter == 0) {
         pid = fork();
         if (pid == 0) {
-          fclose(file);
-          file = fopen(fichS, "w");
+          file = fopen(buffer, "w");
           if (file == NULL)
             die("Erro ao abrir ficheiro");
-          dm2dPrintToFile(matrix_copies[atual], file, tinfo->N +2, tinfo->N +2);
+          dm2dPrintToFile(matrix_copies[atual], file, tinfo->N+2, tinfo->N+2);
+          fclose(file);
+          rename(buffer, fichS);
           exit(1);
         } else if (pid > 0) {
           num_salvaguardas++;
@@ -264,17 +272,40 @@ void *tarefa_trabalhadora(void *args) {
 }
 
 /*--------------------------------------------------------------------
+| Function: periodoHandler
+| Description: Handler for SIGARLM
+---------------------------------------------------------------------*/
+void periodoHandler() {
+
+}
+
+/*--------------------------------------------------------------------
+| Function: handleThis
+| Description: Handler for SIGINT
+---------------------------------------------------------------------*/
+void handleThis() {
+  fclose(file);
+  file = fopen(fichS, "w");
+  if (file == NULL)
+    die("Erro ao abrir ficheiro");
+  dm2dPrintToFile(matrix_copies[atual_global], file, N+2, N+2);
+  kill(main_pid, SIGINT);
+  return;
+}
+
+/*--------------------------------------------------------------------
 | Function: main
 | Description: Entrada do programa
 ---------------------------------------------------------------------*/
 
 int main (int argc, char** argv) {
-  int N;
+
   double tEsq, tSup, tDir, tInf;
   int iter, trab;
   int tam_fatia;
   int res;
   int periodoS;
+  main_pid = getpid();
 
   if (argc != 11) {
     fprintf(stderr, "Utilizacao: ./heatSim N tEsq tSup tDir tInf iter trab maxD fichS periodoS\n\n");
@@ -311,6 +342,8 @@ int main (int argc, char** argv) {
     salvaguarda = 0;
 }
 
+  signal(SIGINT, handleThis);
+
   // Inicializar Barreira
   dual_barrier = dualBarrierInit(trab);
   if (dual_barrier == NULL)
@@ -319,7 +352,7 @@ int main (int argc, char** argv) {
   // Calcular tamanho de cada fatia
   tam_fatia = N / trab;
 
-  file = inicializar_matrizes(N, tSup, tInf, tEsq, tDir, periodoS);
+  inicializar_matrizes(N, tSup, tInf, tEsq, tDir);
 
   // Reservar memoria para trabalhadoras
   thread_info *tinfo = (thread_info*) malloc(trab * sizeof(thread_info));
@@ -360,7 +393,6 @@ int main (int argc, char** argv) {
   free(trabalhadoras);
   dualBarrierFree(dual_barrier);
 
-  fclose(file);
   unlink(fichS);
 
   return 0;
