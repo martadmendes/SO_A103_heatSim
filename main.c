@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <pthread.h>
 #include <math.h>
+#include <unistd.h>
 
 #include "matrix2d.h"
 #include "util.h"
@@ -23,6 +24,7 @@ typedef struct {
   int    trab;
   int    tam_fatia;
   double maxD;
+  int    periodoS;
 } thread_info;
 
 /*--------------------------------------------------------------------
@@ -47,6 +49,7 @@ DoubleMatrix2D     *matrix_copies[2];
 DualBarrierWithMax *dual_barrier;
 double              maxD;
 FILE               *file;
+int                 salvaguarda = 1;
 
 /*--------------------------------------------------------------------
 | Function: dualBarrierInit
@@ -153,7 +156,7 @@ double dualBarrierWait (DualBarrierWithMax* b, int current, double localmax) {
 /*--------------------------------------------------------------------
 | Function: inicializar_matrizes
 | Description: Funcao executada pela tarefa mestre para inicializar as
-|              matrizes. As matrizes sao inicializadas dependendo se 
+|              matrizes. As matrizes sao inicializadas dependendo se
 |              existir o ficheiro passado como argumento. Retorna o
 |              file descriptor aberto.
 ---------------------------------------------------------------------*/
@@ -198,6 +201,10 @@ void *tarefa_trabalhadora(void *args) {
   int my_base = tinfo->id * tam_fatia;
   double global_delta = INFINITY;
   int iter = 0;
+  int periodo_counter = tinfo->periodoS;
+  pid_t pid;
+  int status;
+  int num_salvaguardas = 0;
 
   do {
     int atual = iter % 2;
@@ -221,7 +228,28 @@ void *tarefa_trabalhadora(void *args) {
     }
     // barreira de sincronizacao; calcular delta global
     global_delta = dualBarrierWait(dual_barrier, atual, max_delta);
+
+    if (salvaguarda && tinfo->id == 1) {
+      pid = fork();
+      if (pid == 0) {
+        if (periodo_counter == 0) {
+          dm2dPrintToFile(matrix_copies[atual], file, tinfo->N +2, tinfo->N +2);
+          periodo_counter = tinfo->periodoS;
+        } else periodo_counter--;
+      } else if (pid > 0) {
+        num_salvaguardas++;
+      } else {
+          fprintf(stderr, "Erro ao criar processo paralelo.\n");
+          return NULL;
+      }
+    }
   } while (++iter < tinfo->iter && global_delta >= tinfo->maxD);
+
+  if (tinfo->id == 1){
+    while (num_salvaguardas > 0){
+      wait(&status);
+    }
+  }
 
   return 0;
 }
@@ -271,7 +299,9 @@ int main (int argc, char** argv) {
     fprintf(stderr, "\nErro: Argumento %s invalido.\n"
                     "%s deve ser >= 0.", "periodoS", "periodoS");
     return -1;
-  }
+} else if (periodoS == 0) {
+    salvaguarda = 0;
+}
 
   // Inicializar Barreira
   dual_barrier = dualBarrierInit(trab);
