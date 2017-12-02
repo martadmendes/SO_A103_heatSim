@@ -253,7 +253,7 @@ void *tarefa_trabalhadora(void *args) {
   if (tinfo->id == 1){
     while (num_salvaguardas > 0){
       wait(&status);
-      num_salvagudardas--;
+      num_salvaguardas--;
     }
   }
 
