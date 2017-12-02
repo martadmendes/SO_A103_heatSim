@@ -50,6 +50,7 @@ DualBarrierWithMax *dual_barrier;
 double              maxD;
 FILE               *file;
 int                 salvaguarda = 1;
+char               *fichS;
 
 /*--------------------------------------------------------------------
 | Function: dualBarrierInit
@@ -161,11 +162,10 @@ double dualBarrierWait (DualBarrierWithMax* b, int current, double localmax) {
 |              file descriptor aberto.
 ---------------------------------------------------------------------*/
 
-FILE *inicializar_matrizes(char *fich_nome, int N, int tSup, int tInf,
+FILE *inicializar_matrizes(int N, int tSup, int tInf,
                            int tEsq, int tDir, int periodoS) {
-  printf("A inicializar matriz\n");
   FILE *fp;
-  fp = fopen(fich_nome, "r");
+  fp = fopen(fichS, "r");
   if (fp != NULL) {
     matrix_copies[0] = readMatrix2dFromFile(fp, N+2, N+2);
     matrix_copies[1] = dm2dNew(N+2, N+2);
@@ -185,11 +185,10 @@ FILE *inicializar_matrizes(char *fich_nome, int N, int tSup, int tInf,
     dm2dCopy (matrix_copies[1],matrix_copies[0]);
   }
   if (periodoS > 0) {
-    fp = fopen(fich_nome, "w");
+    fp = fopen(fichS, "w");
     if (fp == NULL)
       die("Erro ao abrir ficheiro");
   }
-  printf("Inicializadas matrizes\n");
   return fp;
 }
 
@@ -237,8 +236,12 @@ void *tarefa_trabalhadora(void *args) {
       if (periodo_counter == 0) {
         pid = fork();
         if (pid == 0) {
-            dm2dPrintToFile(matrix_copies[atual], file, tinfo->N +2, tinfo->N +2);
-            exit(1);
+          fclose(file);
+          file = fopen(fichS, "w");
+          if (file == NULL)
+            die("Erro ao abrir ficheiro");
+          dm2dPrintToFile(matrix_copies[atual], file, tinfo->N +2, tinfo->N +2);
+          exit(1);
         } else if (pid > 0) {
           num_salvaguardas++;
           periodo_counter = tinfo->periodoS;
@@ -271,7 +274,6 @@ int main (int argc, char** argv) {
   int iter, trab;
   int tam_fatia;
   int res;
-  char* fichS;
   int periodoS;
 
   if (argc != 11) {
@@ -317,7 +319,7 @@ int main (int argc, char** argv) {
   // Calcular tamanho de cada fatia
   tam_fatia = N / trab;
 
-  file = inicializar_matrizes(fichS, N, tSup, tInf, tEsq, tDir, periodoS);
+  file = inicializar_matrizes(N, tSup, tInf, tEsq, tDir, periodoS);
 
   // Reservar memoria para trabalhadoras
   thread_info *tinfo = (thread_info*) malloc(trab * sizeof(thread_info));
@@ -359,7 +361,7 @@ int main (int argc, char** argv) {
   dualBarrierFree(dual_barrier);
 
   fclose(file);
-  //unlink(fichS);
+  unlink(fichS);
 
   return 0;
 }
