@@ -23,12 +23,10 @@
 
 typedef struct {
   int    id;
-  int    N;
   int    iter;
   int    trab;
   int    tam_fatia;
   double maxD;
-  int    periodoS;
 } thread_info;
 
 /*--------------------------------------------------------------------
@@ -55,9 +53,12 @@ double              maxD;
 FILE               *file;
 int                 salvaguarda = 1;
 char               *fichS;
+int                 periodoS;
 int                 atual_global;
 pid_t               main_pid;
 int                 N;
+int                 printing = 0;
+pid_t               printer_pid;
 
 /*--------------------------------------------------------------------
 | Function: dualBarrierInit
@@ -139,6 +140,7 @@ double dualBarrierWait (DualBarrierWithMax* b, int current, double localmax) {
     b->iteracoes_concluidas++;
     b->pending[next]  = b->total_nodes;
     b->maxdelta[next] = 0;
+    atual_global = 1 - current;
     if (pthread_cond_broadcast(&(b->wait[current])) != 0) {
       fprintf(stderr, "\nErro a assinalar todos em variável de condição\n");
       exit(1);
@@ -206,18 +208,6 @@ void *tarefa_trabalhadora(void *args) {
   double global_delta = INFINITY;
   int iter = 0;
 
-  int periodo_counter = tinfo->periodoS;
-  pid_t pid;
-  int status;
-  int num_salvaguardas = 0;
-
-  char buffer[256] = "";
-  strcat(buffer, fichS);
-  strcat(buffer, "~");
-  buffer[strlen(buffer)-1] = 0;
-
-  pid_t child_pid;
-
   do {
     int atual = iter % 2;
     int prox = 1 - iter % 2;
@@ -225,7 +215,7 @@ void *tarefa_trabalhadora(void *args) {
 
     // Calcular Pontos Internos
     for (int i = my_base; i < my_base + tinfo->tam_fatia; i++) {
-      for (int j = 0; j < tinfo->N; j++) {
+      for (int j = 0; j < N; j++) {
         double val = (dm2dGetEntry(matrix_copies[atual], i,   j+1) +
                       dm2dGetEntry(matrix_copies[atual], i+2, j+1) +
                       dm2dGetEntry(matrix_copies[atual], i+1, j) +
@@ -240,37 +230,43 @@ void *tarefa_trabalhadora(void *args) {
     }
     // barreira de sincronizacao; calcular delta global
     global_delta = dualBarrierWait(dual_barrier, atual, max_delta);
-    atual_global = prox;
-
-    if (salvaguarda && tinfo->id == 1) {
-      if(periodo_counter == 0) {
-        if (num_salvaguardas > 0) {
-          waitpid(child_pid, &status, 0);
-          num_salvaguardas--;
-        }
-        pid = fork();
-        if (pid == 0) {
-          file = fopen(buffer, "w");
-          if (file == NULL)
-            die("Erro ao abrir ficheiro");
-          dm2dPrintToFile(matrix_copies[atual], file, tinfo->N+2, tinfo->N+2);
-          fclose(file);
-          rename(buffer, fichS);
-          exit(1);
-        } else if (pid > 0) {
-          num_salvaguardas++;
-          periodo_counter = tinfo->periodoS;
-          child_pid = pid;
-        } else {
-            fprintf(stderr, "Erro ao criar processo paralelo.\n");
-            return NULL;
-        }
-        
-      } else periodo_counter--;
-    }
   } while (++iter < tinfo->iter && global_delta >= tinfo->maxD);
 
   return 0;
+}
+
+/*--------------------------------------------------------------------
+| Function: timerHandler
+| Description: Handler for SIGALRM
+---------------------------------------------------------------------*/
+void timerHandler() {
+  int status;
+  char buffer[256] = "";
+  strcat(buffer, fichS);
+  strcat(buffer, "~");
+  buffer[strlen(buffer)-1] = 0;
+
+  if(printing) {
+    waitpid(printer_pid, &status, 0);
+    printing = 0;
+  }
+  printer_pid = fork();
+  if (printer_pid == 0) {
+    file = fopen(buffer, "w");
+    if (file == NULL)
+      die("Erro ao abrir ficheiro");
+    dm2dPrintToFile(matrix_copies[atual_global], file, N+2, N+2);
+    fclose(file);
+    rename(buffer, fichS);
+    exit(1);
+  } else if (printer_pid > 0) {
+    signal(SIGALRM, timerHandler);
+    alarm(periodoS);
+    printing = 1;
+  } else {
+    fprintf(stderr, "Erro ao criar processo paralelo.\n");
+    return;
+  }
 }
 
 /*--------------------------------------------------------------------
@@ -360,17 +356,18 @@ int main (int argc, char** argv) {
   // Criar trabalhadoras
   for (int i=0; i < trab; i++) {
     tinfo[i].id = i;
-    tinfo[i].N = N;
     tinfo[i].iter = iter;
     tinfo[i].trab = trab;
     tinfo[i].tam_fatia = tam_fatia;
     tinfo[i].maxD = maxD;
-    tinfo[i].periodoS = periodoS;
     res = pthread_create(&trabalhadoras[i], NULL, tarefa_trabalhadora, &tinfo[i]);
     if (res != 0) {
       die("Erro ao criar uma tarefa trabalhadora");
     }
   }
+
+  signal(SIGALRM, timerHandler);
+  alarm(periodoS);
 
   // Esperar que as trabalhadoras terminem
   for (int i=0; i<trab; i++) {
