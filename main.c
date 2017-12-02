@@ -214,6 +214,9 @@ void *tarefa_trabalhadora(void *args) {
   char buffer[256] = "";
   strcat(buffer, fichS);
   strcat(buffer, "~");
+  buffer[strlen(buffer)-1] = 0;
+
+  pid_t child_pid;
 
   do {
     int atual = iter % 2;
@@ -241,6 +244,10 @@ void *tarefa_trabalhadora(void *args) {
 
     if (salvaguarda && tinfo->id == 1) {
       if(periodo_counter == 0) {
+        if (num_salvaguardas > 0) {
+          waitpid(child_pid, &status, 0);
+          num_salvaguardas--;
+        }
         pid = fork();
         if (pid == 0) {
           file = fopen(buffer, "w");
@@ -253,36 +260,24 @@ void *tarefa_trabalhadora(void *args) {
         } else if (pid > 0) {
           num_salvaguardas++;
           periodo_counter = tinfo->periodoS;
+          child_pid = pid;
         } else {
             fprintf(stderr, "Erro ao criar processo paralelo.\n");
             return NULL;
         }
+        
       } else periodo_counter--;
     }
   } while (++iter < tinfo->iter && global_delta >= tinfo->maxD);
 
-  if (tinfo->id == 1){
-    while (num_salvaguardas > 0){
-      wait(&status);
-      num_salvaguardas--;
-    }
-  }
-
   return 0;
-}
-
-/*--------------------------------------------------------------------
-| Function: periodoHandler
-| Description: Handler for SIGARLM
----------------------------------------------------------------------*/
-void periodoHandler() {
-
 }
 
 /*--------------------------------------------------------------------
 | Function: handleThis
 | Description: Handler for SIGINT
 ---------------------------------------------------------------------*/
+
 void handleThis() {
   fclose(file);
   file = fopen(fichS, "w");
