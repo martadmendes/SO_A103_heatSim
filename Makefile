@@ -27,3 +27,6 @@ zip: heatSim_p4_solucao.zip
 
 heatSim_p4_solucao.zip: Makefile main.c matrix2d.h util.h matrix2d.c matrix2d.h util.c
 	zip $@ $+
+
+run:
+	./heatSim 8 10 10 0 0 10 4 1 results 2

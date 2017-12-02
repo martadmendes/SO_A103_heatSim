@@ -162,7 +162,8 @@ double dualBarrierWait (DualBarrierWithMax* b, int current, double localmax) {
 ---------------------------------------------------------------------*/
 
 FILE *inicializar_matrizes(char *fich_nome, int N, int tSup, int tInf,
-                           int tEsq, int tDir) {
+                           int tEsq, int tDir, int periodoS) {
+  printf("A inicializar matriz\n");
   FILE *fp;
   fp = fopen(fich_nome, "r");
   if (fp != NULL) {
@@ -183,9 +184,12 @@ FILE *inicializar_matrizes(char *fich_nome, int N, int tSup, int tInf,
     dm2dSetColumnTo (matrix_copies[0], N+1, tDir);
     dm2dCopy (matrix_copies[1],matrix_copies[0]);
   }
-  fp = fopen(fich_nome, "w");
-  if (fp == NULL)
-    die("Erro ao abrir ficheiro");
+  if (periodoS > 0) {
+    fp = fopen(fich_nome, "w");
+    if (fp == NULL)
+      die("Erro ao abrir ficheiro");
+  }
+  printf("Inicializadas matrizes\n");
   return fp;
 }
 
@@ -283,7 +287,7 @@ int main (int argc, char** argv) {
   trab = parse_integer_or_exit(argv[7], "trab", 1);
   maxD = parse_double_or_exit (argv[8], "maxD", 0);
   fichS = argv[9];
-  periodoS = parse_integer_or_exit (argv[10], "periodoS", 1);
+  periodoS = parse_integer_or_exit (argv[10], "periodoS", 0);
 
   //fprintf(stderr, "\nArgumentos:\n"
   // " N=d tEsq=%.1f tSup=%.1f tDir=%.1f tInf=%.1f iter=%d trab=%d csz=%d",
@@ -311,7 +315,7 @@ int main (int argc, char** argv) {
   // Calcular tamanho de cada fatia
   tam_fatia = N / trab;
 
-  file = inicializar_matrizes(fichS, N, tSup, tInf, tEsq, tDir);
+  file = inicializar_matrizes(fichS, N, tSup, tInf, tEsq, tDir, periodoS);
 
   // Reservar memoria para trabalhadoras
   thread_info *tinfo = (thread_info*) malloc(trab * sizeof(thread_info));
@@ -352,6 +356,7 @@ int main (int argc, char** argv) {
   dualBarrierFree(dual_barrier);
 
   fclose(file);
+  //unlink(fichS);
 
   return 0;
 }
